@@ -10,7 +10,7 @@ pub(crate) const BREAKPOINTS: &[(u32, &str)] = &[
     (0x10000, "Interrupt: Timer0"),
     (0x0B66, "Interrupt: Entering user code"),
     (0x0C30, "Interrupt: Leaving user code"),
-    (0x10B66, "Interrupt:Entering user code"),
+    (0x10B66, "Interrupt: Entering user code"),
     (0x10C30, "Interrupt: Leaving user code"),
     (0x5A88, "Test failed!!!"),
     (0x5D5A, "Testing failed!!!"),
