@@ -135,9 +135,9 @@ Output:
   - `...._...x` => session 1: 1 = 132 columns, 0 = 80 columns
   
  - 0x7ff4:
-  - `.x.._....` => 0 = normal VRAM layout? 1 = alternate VRAM layout? (memory existance is tested in bootstrap, 1 is set if not there)
+  - `.x.._....` => 0 = VRAM is SRAM. 1 = VRAM is DRAM. (controls refresh enable)
   - `...x_....` => 1 = 70Hz (70Hz ~14.29ms/frame, 536 lines), 0 = 60Hz (60Hz ~16.67ms/frame, 625 lines) (CONFIRMED via ROM disassembly)
-  - `...._x...` => unknown, affects read of 7ff6, no apparent visual impact but used during font loading
+  - `...._x...` => may gate the blink bit for the status row (ie: if set, blink affects status).
   - `...._.x..` => unknown, unused in ROM
   - `...._..x.` => session 2: invert
   - `...._...x` => session 2: 1 = 132 columns, 0 = 80 columns
@@ -149,9 +149,10 @@ Output:
   - `...._..xx` => ??? (set to 0 during boot)
 
  - 0x7ff6: 2x 8-bit register, written twice, once for screen 1 and once for screen 2
-    - Reads appear to be some sort of chargen status (uncertain, function of whole screen + 7ff3/7ff4 registers)
-    - Writes advance the chargen position to the next row if a row is partially written
-    - <a><b> - font height/row height (0 for 16px)
+    - Reads appear to be some sort of pixel counter - incremented each time a
+      font pixel (or divider pixel) is rendered. Bold might contribute double.
+    - Writes advance the chargen position to the next row if a row is in progress
+    - <a><b> - font height/row height (0 for 16px), second nibble may be underline position
     - 78: 50 lines (0111_1000)
     - 9A: 38 lines (1001_1010)
     - D0: 26 lines (1101_0000)
@@ -184,11 +185,8 @@ Output:
     - Byte 1:
         - 0x02: split window divider
         - 0x04: double-width
-        - 0x08: double-width, double-height top half
-        - 0x0c: double-width, double-height bottom half
-        - `....xx..` => 1 = double width
-        - `......x.` => 1 = swap between screen 0 and screen 1 attributes
-        - `xxxx...x` => 1 = unknown
+        - 0x08: double-width, double-height top half (underline always invisible)
+        - 0x0c: double-width, double-height bottom half (underline doubled if visible)
 
  - Char attributes:
     

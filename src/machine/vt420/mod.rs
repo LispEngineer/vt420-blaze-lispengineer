@@ -2,6 +2,7 @@ pub mod breakpoints;
 pub mod memory;
 pub mod static_analysis;
 pub mod video;
+mod video_font_register;
 
 use std::cell::Cell;
 use std::fs;

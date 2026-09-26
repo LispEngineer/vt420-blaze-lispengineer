@@ -3,9 +3,9 @@
 //! sync signal passes correctly, and the self-test for number of csync pulses
 //! per frame returns both the correct timing and correct number of pulses.
 
-use crate::machine::generic::vsync::Timing;
-use hex_literal::hex;
-use tracing::{info, trace};
+use tracing::info;
+
+use crate::machine::{generic::vsync::Timing, vt420::video_font_register::calculate_7ff6_read};
 
 /// The number of vertical lines expected by the ROM
 pub const VERTICAL_LINES: usize = 417;
@@ -517,71 +517,39 @@ pub fn decode_font_downloadable(
     }
 }
 
-/// This handles a read of 0x7ff6. We don't know what this register does, but it
-/// appears to return something that is a function of 80/132 column mode,
-/// invert, the "screen selection toggle" row attribute (along with double-width
-/// char flag), and some other unknown bits.
-///
-/// Since 0x7ff6 is used for row height writes, it is reasonable to assume this
-/// is something to do with the chargen. The char width and invert bits are
-/// known, as we can see them changing onscreen on a real device. The other bits
-/// might be something along the lines of whole-screen bold, font bank select,
-/// etc (needs some investigation on real hardware).
-///
-/// N.B.: This function returns the values expected by the diagnostics to pass
-/// rather than computing what they should be.
-fn calculate_7ff6_read(a: u8, b: u8, vram: &[u8]) -> u8 {
-    const C: [u8; 16] = [
-        0x0b, 0x0b, 0x0b, 0x0d, // section 1a (80, no invert)
-        0x0b, 0x04, 0x0b, 0x0d, // section 1b (80)
-        0x03, 0x03, 0x03, 0x0d, // section 2a (132, no invert)
-        0x03, 0x01, 0x03, 0x0d, // section 2b (132)
-    ];
-
-    let c4 = (a & 0b0000_1000) != 0; // screen select
-    let x = if c4 { b } else { a };
-
-    // This _appears_ to have no visual impact on the screen
-    let c0 = (b & 0b0000_1000) != 0; // ?
-    let c1 = (a & 0b0100_0000) != 0; // blink bit
-    let c2 = (x & 0b0000_0010) != 0; // invert
-    let c3 = (x & 0b0000_0001) != 0; // 80/132
-
-    let c_idx = c0 as u8 | ((c1 as u8) << 1) | ((c2 as u8) << 2) | ((c3 as u8) << 3);
-    let c = C[c_idx as usize];
-
-    // Expected output from the mapper when we place a '2' in the second field for a row,
-    // indexed by row
-    let expected: [u8; 26] =
-        hex!("04 06 08 0a 0c 0e 0f 00 01 02 03 05 07 09 0b 0d 0e 0f 00 01 02 04 06 08 0a 0c");
-    if vram[1] == 0 || vram[1] == 2 {
-        let check = &vram[1..expected.len() * 2 + 2];
-        if let Some(pos) = check.iter().position(|&x| x == 2) {
-            return expected[pos / 2];
+/// Dump the first 26 VRAM rows for diagnostics.
+#[allow(unused)]
+fn dump_vram_rows(vram: &[u8]) {
+    for i in 0..26u8 {
+        let table = i as usize * 2;
+        if table + 1 >= vram.len() {
+            break;
         }
+        let addr_byte = vram[table];
+        let attr_byte = vram[table + 1];
+        let offset = Row(addr_byte, attr_byte).vram_offset() as usize;
+        let end = (offset + 256).min(vram.len());
+        let content: String = vram
+            .get(offset..end)
+            .map(|s| {
+                s.iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_else(|| "<out of range>".into());
+        info!(
+            "VRAM[{i:2}] addr={addr_byte:02X} attr={attr_byte:02X} page@{offset:04X} ({}B): {content}",
+            end.saturating_sub(offset)
+        );
     }
-
-    // This isn't totally correct, it seems to require a function of all rows
-    let mask_bits = match vram[1] & 0b0000_1111 {
-        0b0000 => 0b0000,
-        0b0100 => 0b1110,
-        0b1000 => 0b1011,
-        0b1100 => 0b0001,
-        _ => 0b0000,
-    };
-
-    trace!(
-        "RAM A: {:02X?} {a:08b}, B: {:02X?} {b:08b}, C[{:02X?}] = {:02X?} {c:08b} mask: {:02X?}={mask_bits:08b}",
-        a, b, c_idx, c, vram[1]
-    );
-
-    c ^ mask_bits
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::machine::generic::vsync::SyncGen;
+    use hex_literal::hex;
 
     #[test]
     fn test_sync_gen_60hz() {
@@ -668,82 +636,6 @@ mod tests {
                 runs.windows(2)
                     .any(|w| w[0].0 && w[0].1 >= 15 && !w[1].0 && w[1].1 >= 15)
             );
-        }
-    }
-
-    /// It's not clear what the mapper is doing, so let's just test we output
-    /// the same values as the ROM expects.
-    #[test]
-    fn test_calculate_mapper_7ff6() {
-        // The offsets for each row - remember that this is shifted left by 1 when stored
-        // in ram.
-        const ROWS: [u8; 27] = hex!(
-            "01 02 04 08 05 10 20 40 50 70 11 22 44 2a 55 03 06 0c 18 30 60 07 0e 1c 38 0f 1e"
-        );
-
-        let mut vram = [0_u8; 0x40];
-        for (i, &row) in ROWS.iter().enumerate() {
-            vram[i * 2] = row << 1;
-        }
-        eprintln!("vram = {vram:02X?}");
-
-        // Set 7ff3/7ff4 to various values, with the second field set to zero
-        const EXPECTED_0: [u8; 32] = hex!(
-            "0b 0b 0b 0d 0b 04 0b 0d 03 03 03 0d 03 01 03 0d 0b 0b 0b 0d 0b 04 0b 0d 03 03 03 0d 03 01 03 0d"
-        );
-        let mut mapper3 = 0;
-        let mut mapper4 = 0;
-        for i in 0..32 {
-            let i2 = (i & (1 << 2)) != 0;
-            let i3 = (i & (1 << 3)) != 0;
-            mapper3 &= 0b10111111;
-            if (i & (1 << 1)) != 0 {
-                mapper3 |= 0b01000000;
-            }
-            mapper3 |= 0b00001000;
-            if (i & (1 << 4)) != 1 {
-                mapper3 = (mapper3 & 0b11110100) | (i3 as u8) | ((i2 as u8) << 1);
-            }
-            mapper4 &= 0b11110111;
-            if (i & (1 << 0)) != 0 {
-                mapper4 |= 0b00001000;
-            }
-            if (i & (1 << 4)) != 0 {
-                mapper4 = (mapper4 & 0b11111100) | (i3 as u8) | ((i2 as u8) << 1);
-            }
-
-            let result = calculate_7ff6_read(mapper3, mapper4, &vram);
-            eprintln!(
-                "i = {i:02X?}, a = {mapper3:02X?}, b = {mapper4:02X?}, result = {result:02X?}"
-            );
-            assert_eq!(result, EXPECTED_0[i], "vram = {vram:02X?}");
-        }
-
-        // Set the second field of all rows to 0x0c, 0x08, 0x04, 0x00
-        const EXPECTED_1: [u8; 4] = hex!("0a 00 05 0b");
-        for (i, &v) in [0x0c, 0x08, 0x04, 0].iter().enumerate() {
-            let mapper3 = 4;
-            let mapper4 = 0x1b;
-
-            for j in 0..vram.len() {
-                if j % 2 == 1 {
-                    vram[j] = v;
-                }
-            }
-
-            let result = calculate_7ff6_read(mapper3, mapper4, &vram);
-            assert_eq!(result, EXPECTED_1[i], "vram = {vram:02X?}");
-        }
-
-        // Set bit 1 of a single field at a time, starting from the second last (ie: 0x0f in the list of ROWS above)
-        const EXPECTED_2: [u8; 26] =
-            hex!("04 06 08 0a 0c 0e 0f 00 01 02 03 05 07 09 0b 0d 0e 0f 00 01 02 04 06 08 0a 0c");
-        for i in (0..26).rev() {
-            vram[i * 2 + 1] ^= 2;
-            vram[i * 2 + 3] = 0;
-
-            let result = calculate_7ff6_read(mapper3, mapper4, &vram);
-            assert_eq!(result, EXPECTED_2[i], "vram = {vram:02X?}");
         }
     }
 
