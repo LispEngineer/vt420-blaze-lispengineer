@@ -1,8 +1,10 @@
 #![deny(clippy::all)]
 #![forbid(unsafe_code)]
 
-pub const REAL_WIDTH: u32 = 800;
-pub const REAL_HEIGHT: u32 = 416;
+use crate::machine::generic::display::{FRAME_HEIGHT, FRAME_WIDTH};
+
+pub const REAL_WIDTH: u32 = FRAME_WIDTH as u32;
+pub const REAL_HEIGHT: u32 = FRAME_HEIGHT as u32;
 // TODO: Waiting on pixels to support non-square aspect ratios
 pub const ASPECT_RATIO: f64 = 4.0 / 3.0;
 pub const WINDOW_WIDTH: u32 = REAL_WIDTH as u32;

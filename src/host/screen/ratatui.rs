@@ -17,13 +17,11 @@ use i8051::sfr::{SFR_P1, SFR_P2, SFR_P3};
 use tracing::warn;
 
 use crate::host::lk201::crossterm::{CrosstermKeyboard, KeyboardCommand};
-use crate::host::screen::unicode;
+use crate::machine::generic::display::{Display, TextAttr};
 use crate::machine::vt420::System;
-use crate::machine::vt420::video::{Mapper, RowFlags, decode_vram};
 
 pub struct Screen<'a> {
-    vram: &'a [u8],
-    mapper: &'a Mapper,
+    system: &'a System,
     display_mode: DisplayMode,
 }
 
@@ -35,10 +33,9 @@ pub enum DisplayMode {
 }
 
 impl<'a> Screen<'a> {
-    pub fn new(vram: &'a [u8], mapper: &'a Mapper) -> Self {
+    pub fn new(system: &'a System) -> Self {
         Self {
-            vram,
-            mapper,
+            system,
             display_mode: DisplayMode::Normal,
         }
     }
@@ -51,97 +48,37 @@ impl<'a> Screen<'a> {
 
 impl<'a> Widget for Screen<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let vram = self.vram;
+        if self.display_mode == DisplayMode::Normal {
+            self.system.render_textbuffer(&mut |row, column, ch, attr| {
+                if let Some(cell) =
+                    buf.cell_mut((area.left() + column as u16, area.top() + row as u16))
+                {
+                    let mut style = Style::default();
+                    if attr.contains(TextAttr::UNDERLINE) {
+                        style = style.underlined();
+                    }
+                    if attr.contains(TextAttr::BOLD) {
+                        style = style.bold();
+                    }
+                    if attr.contains(TextAttr::REVERSE) {
+                        style = style.reversed();
+                    }
+                    cell.set_char(ch);
+                    cell.set_style(style);
+                }
+            });
+            return;
+        }
+
+        let vram =
+            &self.system.memory.vram[self.system.memory.mapper.vram_offset_display() as usize..];
+        let mapper = &self.system.memory.mapper;
         let vram_base = 0;
 
         let mut line = [0_u16; 256];
         let mut attr = [0_u8; 256];
 
-        #[derive(Default)]
-        struct Render {
-            row_idx: usize,
-            row_flags: RowFlags,
-            smooth_row: u8,
-        }
-
-        let render = Render {
-            smooth_row: if self.mapper.get(2) != 0 {
-                self.mapper.get(0)
-            } else {
-                u8::MAX
-            },
-            ..Default::default()
-        };
-
-        if self.display_mode == DisplayMode::Normal {
-            decode_vram(
-                self.vram,
-                self.mapper,
-                |render, row, attr, row_flags| {
-                    render.row_idx = row as usize;
-                    render.row_flags = row_flags;
-
-                    if row >= render.smooth_row {
-                        render.row_idx = render.row_idx.saturating_sub(1);
-                    }
-                },
-                |render, mut column, mut c, attr| {
-                    if column == 0 && render.row_flags.is_80 {
-                        let y = area.top() + render.row_idx as u16;
-                        for x in 80..132 {
-                            if let Some(cell) = buf.cell_mut((x, y)) {
-                                cell.set_char(' ');
-                                cell.set_style(if render.row_flags.invert {
-                                    Style::default().reversed()
-                                } else {
-                                    Style::default()
-                                });
-                            }
-                        }
-                    }
-
-                    let mut style = Style::default();
-                    if attr.is_underline() {
-                        style = style.underlined();
-                    }
-                    if attr.is_bold() {
-                        style = style.bold();
-                    }
-                    if attr.is_reverse() ^ render.row_flags.invert {
-                        style = style.reversed();
-                    }
-
-                    if render.row_flags.double_width {
-                        column *= 2;
-                    }
-
-                    if let Some(cell) = buf.cell_mut((
-                        area.left() + column as u16,
-                        area.top() + render.row_idx as u16,
-                    )) {
-                        if render.row_flags.status_row && attr.is_upper_bit() {
-                            c |= 0x800;
-                        }
-                        cell.set_char(unicode::map_char(c).unwrap_or('.'));
-                        cell.set_style(style);
-
-                        if render.row_flags.double_width {
-                            if let Some(cell) = buf.cell_mut((
-                                area.left() + column as u16 + 1,
-                                area.top() + render.row_idx as u16,
-                            )) {
-                                cell.set_char(' ');
-                                cell.set_style(style);
-                            }
-                        }
-                    }
-                },
-                render,
-            );
-            return;
-        }
-
-        let Some(rows) = self.mapper.row_count(vram) else {
+        let Some(rows) = mapper.row_count(vram) else {
             return;
         };
 
@@ -151,11 +88,11 @@ impl<'a> Widget for Screen<'a> {
                 continue;
             }
             // Handle smooth scrolling by chopping the top row
-            if self.mapper.get(2) != 0 {
-                if row_idx as u8 == self.mapper.get(0) {
+            if mapper.get(2) != 0 {
+                if row_idx as u8 == mapper.get(0) {
                     continue;
                 }
-                if row_idx as u8 > self.mapper.get(0) {
+                if row_idx as u8 > mapper.get(0) {
                     row_idx -= 1;
                 }
             }
@@ -373,11 +310,10 @@ fn run_inner(
                 }
             }
 
-            let vram = &system.memory.vram[system.memory.mapper.vram_offset_display() as usize..];
             // Skip redrawing if the chargen is disabled
             if system.memory.mapper.get(6) & 0xf0 != 0xf0 {
                 terminal.draw(|f| {
-                    let screen = Screen::new(vram, &system.memory.mapper).display_mode(hex);
+                    let screen = Screen::new(&system).display_mode(hex);
                     f.render_widget(screen, f.area());
                     let stage = Span::styled(
                         format!(

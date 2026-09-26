@@ -1,6 +1,8 @@
 pub mod breakpoints;
+pub mod framebuffer;
 pub mod memory;
 pub mod static_analysis;
+pub mod unicode;
 pub mod video;
 mod video_font_register;
 
@@ -254,7 +256,7 @@ impl System {
 
     #[cfg(test)]
     pub(crate) fn dump_screen_text(&self) -> String {
-        use crate::{host::screen::unicode, machine::vt420::video::decode_vram};
+        use crate::machine::vt420::{unicode, video::decode_vram};
         use std::fmt::Write;
 
         let text = String::with_capacity(132 * 25);

@@ -1,4 +1,5 @@
 pub mod color;
+pub mod display;
 pub mod duart;
 pub mod i2c_eeprom;
 pub mod nvr;

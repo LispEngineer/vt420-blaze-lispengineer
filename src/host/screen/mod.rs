@@ -5,5 +5,3 @@ pub mod ratatui;
 
 #[cfg(feature = "graphics")]
 pub mod framebuffer;
-
-pub mod unicode;
