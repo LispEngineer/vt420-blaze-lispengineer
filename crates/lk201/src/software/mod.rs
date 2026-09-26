@@ -12,6 +12,10 @@ impl LK201Sender {
         Self { send }
     }
 
+    pub fn send_raw(&self, code: u8) {
+        _ = self.send.send(code);
+    }
+
     pub fn send_special_key(&self, key: SpecialKey) {
         _ = self.send.send(key as u8);
         // F1-F5 are UpDown
