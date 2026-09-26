@@ -11,6 +11,11 @@ impl TextAttr {
     pub const BOLD: Self = Self(0x01);
     pub const UNDERLINE: Self = Self(0x02);
     pub const REVERSE: Self = Self(0x04);
+    pub const BLINK: Self = Self(0x08);
+    pub const LEFT_HALF: Self = Self(0x10);
+    pub const RIGHT_HALF: Self = Self(0x20);
+    pub const TOP_HALF: Self = Self(0x40);
+    pub const BOTTOM_HALF: Self = Self(0x80);
 
     pub fn bits(self) -> u8 {
         self.0
@@ -35,8 +40,35 @@ impl BitOrAssign for TextAttr {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LineSize {
+    #[default]
+    Single,
+    DoubleWidth,
+    DoubleHeightTop,
+    DoubleHeightBottom,
+}
+
+impl LineSize {
+    pub fn is_double_width(self) -> bool {
+        self != LineSize::Single
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TextLine {
+    pub size: LineSize,
+    pub columns: usize,
+    pub reverse: bool,
+}
+
 pub trait Display {
     fn render_framebuffer(&self, frame: &mut [u8]);
 
-    fn render_textbuffer(&self, cell: &mut dyn FnMut(usize, usize, char, TextAttr));
+    fn render_textbuffer(
+        &self,
+        line: &mut dyn FnMut(usize, TextLine),
+        cell: &mut dyn FnMut(usize, usize, char, TextAttr),
+    );
+}
 }

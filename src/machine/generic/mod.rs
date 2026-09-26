@@ -4,5 +4,6 @@ pub mod duart;
 pub mod i2c_eeprom;
 pub mod keyboard;
 pub mod nvr;
+pub mod ramdac;
 pub mod rom;
 pub mod vsync;

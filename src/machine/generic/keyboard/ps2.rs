@@ -18,6 +18,7 @@ pub struct Ps2Keyboard {
     leds: u8,
     expect_arg: Option<u8>,
     pub pc_keyboard: bool,
+    pub present: bool,
     /// Scanning is off after 0xF5 (disable) until 0xF4 (enable) or a reset.
     enabled: bool,
     scan_set: u8,
@@ -33,6 +34,7 @@ impl Default for Ps2Keyboard {
             leds: 0,
             expect_arg: None,
             pc_keyboard: false,
+            present: true,
             enabled: true,
             scan_set: 2,
             send,
@@ -58,6 +60,9 @@ impl Ps2Keyboard {
     }
 
     pub fn command(&mut self, byte: u8) {
+        if !self.present {
+            return;
+        }
         if let Some(cmd) = self.expect_arg.take() {
             debug!("PS/2 command {cmd:02X} argument {byte:02X}");
             match cmd {
