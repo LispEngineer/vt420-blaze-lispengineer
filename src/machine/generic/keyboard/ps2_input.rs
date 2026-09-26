@@ -1,5 +1,5 @@
-use crate::machine::generic::keyboard::{KeyCap, KeyboardInput};
 use crate::machine::generic::keyboard::ps2::Ps2Sender;
+use crate::machine::generic::keyboard::{KeyCap, KeyboardInput};
 
 /// Break prefix in scan code set 3.
 const BREAK: u8 = 0xF0;
