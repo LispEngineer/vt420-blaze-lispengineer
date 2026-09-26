@@ -16,8 +16,9 @@ use ratatui::widgets::Widget;
 use i8051::sfr::{SFR_P1, SFR_P2, SFR_P3};
 use tracing::warn;
 
-use crate::host::lk201::crossterm::{CrosstermKeyboard, KeyboardCommand};
+use crate::host::keyboard::crossterm::{CrosstermKeyboard, KeyboardCommand};
 use crate::machine::generic::display::{Display, TextAttr};
+use crate::machine::generic::keyboard::lk201_input::Lk201Input;
 use crate::machine::vt420::System;
 
 pub struct Screen<'a> {
@@ -258,6 +259,7 @@ fn run_inner(
     let mut running = true;
     let mut hex = DisplayMode::Normal;
     let mut keyboard = CrosstermKeyboard::default();
+    let mut lk201 = Lk201Input::new(system.keyboard.sender());
     let mut terminal = ratatui::Terminal::new(CrosstermBackend::new(io::stdout()))?;
     loop {
         if running {
@@ -283,7 +285,7 @@ fn run_inner(
                 if start.elapsed() > Duration::from_millis(100) {
                     warn!("Event read took too long: {:?}", start.elapsed());
                 }
-                match keyboard.update_keyboard(&event, &system.keyboard.sender()) {
+                match keyboard.update_keyboard(&event, &mut lk201) {
                     Some(KeyboardCommand::ToggleRun) => {
                         running = !running;
                     }

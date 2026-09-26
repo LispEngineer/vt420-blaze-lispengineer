@@ -19,9 +19,9 @@ use winit::event_loop::EventLoopProxy;
 use winit::{dpi::LogicalSize, event_loop::EventLoop, window::Window};
 use winit_input_helper::WinitInputHelper;
 
-use crate::host::lk201::winit::update_keyboard;
+use crate::host::keyboard::winit::update_keyboard;
 use crate::host::wgpu::policy::FramePolicy;
-use lk201::LK201Sender;
+use crate::machine::generic::keyboard::KeyboardInput;
 
 use tracing::{debug, error, info};
 
@@ -47,8 +47,8 @@ struct Terminal {
     input: WinitInputHelper,
     /// Game pause state.
     paused: bool,
-    /// LK201 keyboard sender.
-    sender: LK201Sender,
+    /// Keyboard input.
+    keyboard: Box<dyn KeyboardInput>,
     /// Frame policy.
     frame_policy: FramePolicy,
     /// Render function.
@@ -59,7 +59,7 @@ struct Terminal {
 
 impl Terminal {
     fn new(
-        sender: LK201Sender,
+        keyboard: Box<dyn KeyboardInput>,
         proxy: EventLoopProxy<Pixels<'static>>,
         render: Box<dyn FnMut(&mut [u8])>,
         step: Box<dyn FnMut()>,
@@ -69,7 +69,7 @@ impl Terminal {
             input: WinitInputHelper::new(),
             paused: false,
             frame_policy: FramePolicy::new(),
-            sender,
+            keyboard,
             render,
             step,
         }
@@ -84,7 +84,7 @@ impl Terminal {
     }
 
     fn update_controls(&mut self) {
-        update_keyboard(&self.input, &self.sender);
+        update_keyboard(&self.input, self.keyboard.as_mut());
     }
 
     fn init_window(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
@@ -306,7 +306,7 @@ fn log_pixels_error(e: Error) {
 }
 
 pub fn main(
-    sender: LK201Sender,
+    keyboard: Box<dyn KeyboardInput>,
     render: impl FnMut(&mut [u8]) + 'static,
     step: impl FnMut() + 'static,
 ) -> Result<(), Error> {
@@ -314,7 +314,7 @@ pub fn main(
         .build()
         .map_err(|e| Error::UserDefined(Box::new(e)))?;
     let proxy = event_loop.create_proxy();
-    let mut terminal = Terminal::new(sender, proxy, Box::new(render), Box::new(step));
+    let mut terminal = Terminal::new(keyboard, proxy, Box::new(render), Box::new(step));
 
     #[cfg(target_arch = "wasm32")]
     {

@@ -1,7 +1,7 @@
 pub mod comm;
 #[cfg(feature = "demo")]
 pub mod demo;
-pub mod lk201;
+pub mod keyboard;
 pub mod logging;
 pub mod screen;
 pub mod ssu;

@@ -12,6 +12,7 @@ use ratatui::crossterm::event::KeyModifiers;
 use tracing::info;
 
 use crate::machine::generic::display::Display;
+use crate::machine::generic::keyboard::lk201_input::Lk201Input;
 use crate::machine::vt420::System;
 
 pub fn run(
@@ -24,7 +25,7 @@ pub fn run(
         return run_debugger(system, cpu, debugger);
     }
 
-    let sender = system.keyboard.sender();
+    let keyboard = Box::new(Lk201Input::new(system.keyboard.sender()));
     let system = Rc::new(RefCell::new(system));
 
     let system_clone = system.clone();
@@ -108,7 +109,7 @@ pub fn run(
 
     let system_clone = system.clone();
     crate::host::wgpu::main(
-        sender,
+        keyboard,
         move |frame| system_clone.borrow().render_framebuffer(frame),
         stepper,
     )
@@ -125,7 +126,7 @@ fn run_debugger(
 ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     debugger.enter()?;
 
-    let sender = system.keyboard.sender();
+    let keyboard = Box::new(Lk201Input::new(system.keyboard.sender()));
     let system = Rc::new(RefCell::new(system));
 
     let system_clone = system.clone();
@@ -165,7 +166,7 @@ fn run_debugger(
 
     let system_clone = system.clone();
     crate::host::wgpu::main(
-        sender,
+        keyboard,
         move |frame| system_clone.borrow().render_framebuffer(frame),
         stepper,
     )?;
