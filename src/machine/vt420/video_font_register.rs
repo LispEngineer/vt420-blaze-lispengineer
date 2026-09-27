@@ -12,30 +12,30 @@ pub(crate) fn calculate_7ff6_read(mapper3: u8, mapper4: u8, vram: &[u8]) -> u8 {
     const BOLD_WEIGHT: u8 = 2; // bold "double-strikes" the body; TODO: should blink
     const FONT_COLS_132: u8 = 6;
     const FONT_COLS_80: u8 = 10;
- 
+
     // Magic (not yet derived from first principles)
     const STATUS_UNDERLINE: u8 = 9;
     const DIVIDER_LINE: u8 = 1;
     const DH_BOTTOM_ADJUSTMENT: u8 = 7;
     const DW_ADJUSTMENT: u8 = 10;
- 
+
     // mapper3 (0x7ff3): bit6 = blink, bit3 = screen select, bit1 = s1 invert, bit0 = s1 132
     // mapper4 (0x7ff4): bit3 = mystery, bit1 = s2 invert, bit0 = s2 132
     let screen2_selected = mapper3 & 0x08 != 0;
     let blink = mapper3 & 0x40 != 0;
     let mystery = mapper4 & 0x08 != 0;
- 
+
     let s1_is_132 = mapper3 & 0x01 != 0;
     let s1_invert = mapper3 & 0x02 != 0;
     let s2_is_132 = mapper4 & 0x01 != 0;
     let s2_invert = mapper4 & 0x02 != 0;
- 
+
     let (is_132, invert) = if screen2_selected {
         (s2_is_132, s2_invert)
     } else {
         (s1_is_132, s1_invert)
     };
- 
+
     // Screen flip / window split: row attr bit 1 marks the split point.
     let mut flip_row = 26usize;
     for r in 0..26 {
@@ -49,10 +49,10 @@ pub(crate) fn calculate_7ff6_read(mapper3: u8, mapper4: u8, vram: &[u8]) -> u8 {
         }
     }
     let has_flip = flip_row < 26;
- 
+
     let mut total: u8 = 0;
     let mut chars = [0u16; 136];
- 
+
     for r in 0..26usize {
         let t = r * 2;
         if t + 1 >= vram.len() {
@@ -60,27 +60,31 @@ pub(crate) fn calculate_7ff6_read(mapper3: u8, mapper4: u8, vram: &[u8]) -> u8 {
         }
         let addr_byte = vram[t];
         let row_attr = vram[t + 1];
- 
+
         // Row geometry field (attr bits 2..3): 1 = double-width, 2 = DH-top, 3 = DH-bottom.
         let geom = (row_attr >> 2) & 3;
         let dh_top = geom == 2;
         let dh_bottom = geom == 3;
         let double_width = geom == 1;
- 
+
         let row_is_132 = if has_flip && r >= flip_row {
             s2_is_132
         } else {
             is_132
         };
- 
+
         // Status row: contributes its own underline (removed under DH-top) + divider.
         if r == 25 {
             let st = if dh_top { 0 } else { STATUS_UNDERLINE };
-            let divider = if has_flip && r >= flip_row { DIVIDER_LINE } else { 0 };
+            let divider = if has_flip && r >= flip_row {
+                DIVIDER_LINE
+            } else {
+                0
+            };
             total = total.wrapping_add(st).wrapping_add(divider);
             continue;
         }
- 
+
         if addr_byte == 0 {
             continue;
         }
@@ -88,12 +92,16 @@ pub(crate) fn calculate_7ff6_read(mapper3: u8, mapper4: u8, vram: &[u8]) -> u8 {
         if row_offset + 256 > vram.len() {
             continue;
         }
- 
+
         decode_row_chars(&vram[row_offset..row_offset + 256], &mut chars);
- 
+
         let n = if row_is_132 { 132 } else { 80 }.min(chars.len());
-        let cellpx: u8 = if row_is_132 { FONT_COLS_132 } else { FONT_COLS_80 };
- 
+        let cellpx: u8 = if row_is_132 {
+            FONT_COLS_132
+        } else {
+            FONT_COLS_80
+        };
+
         // Unclear why these are needed
         let (block_edge, right_edge_clip): (u8, u8) = if dh_top {
             (0, 0)
@@ -102,10 +110,10 @@ pub(crate) fn calculate_7ff6_read(mapper3: u8, mapper4: u8, vram: &[u8]) -> u8 {
         } else {
             (0, 3)
         };
- 
+
         // Solid-fill body of one lit cell.
         let lit_body = FONT_ROWS.wrapping_mul(cellpx).wrapping_mul(BOLD_WEIGHT);
- 
+
         let mut row_sum: u8 = 0;
         for i in 0..n {
             // All cells are underlined but underline is never bold (!)
@@ -116,7 +124,7 @@ pub(crate) fn calculate_7ff6_read(mapper3: u8, mapper4: u8, vram: &[u8]) -> u8 {
             let is_block = chars[i] & 0x100 != 0;
             if is_block {
                 row_sum = row_sum.wrapping_add(lit_body);
-            } else { 
+            } else {
                 let mut edge = block_edge;
                 if i == n - 1 {
                     edge = edge.wrapping_sub(right_edge_clip); // clipped at right screen edge
@@ -124,7 +132,7 @@ pub(crate) fn calculate_7ff6_read(mapper3: u8, mapper4: u8, vram: &[u8]) -> u8 {
                 row_sum = row_sum.wrapping_add(edge);
             }
         }
- 
+
         // EMPIRICAL — vertical-emission TODO. DH-bottom doubles the underline onto
         // the bottom half; double-width re-renders at 2x. Both are vertical effects
         // this horizontal scan can't derive, and Dataset B can't separate them.
@@ -133,22 +141,22 @@ pub(crate) fn calculate_7ff6_read(mapper3: u8, mapper4: u8, vram: &[u8]) -> u8 {
         } else if double_width {
             row_sum = row_sum.wrapping_add(DW_ADJUSTMENT);
         }
- 
+
         total = total.wrapping_add(row_sum);
     }
- 
+
     // mystery: status-row bold/blink control -> captured status values.
     if mystery {
         total = total.wrapping_add(myst_lookup(is_132, invert, blink));
     }
- 
+
     let result = total & 0x0f;
- 
+
     trace!(
         "7ff6: m3={:02X} m4={:02X} is132={} inv={} bl={} myst={} flip={} -> {:02X}",
         mapper3, mapper4, is_132, invert, blink, mystery, flip_row, result
     );
- 
+
     result
 }
 

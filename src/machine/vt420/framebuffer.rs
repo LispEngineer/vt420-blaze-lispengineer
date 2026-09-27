@@ -1,5 +1,5 @@
 use crate::machine::generic::color::DEFAULT_COLOR;
-use crate::machine::generic::display::{Display, FRAME_WIDTH, TextAttr};
+use crate::machine::generic::display::{Display, FRAME_WIDTH, LineSize, TextAttr, TextLine};
 use crate::machine::vt420::System;
 use crate::machine::vt420::unicode;
 use crate::machine::vt420::video::{RowFlags, decode_font, decode_font_downloadable, decode_vram};
@@ -183,7 +183,11 @@ impl Display for System {
         // }
     }
 
-    fn render_textbuffer(&self, cell: &mut dyn FnMut(usize, usize, char, TextAttr)) {
+    fn render_textbuffer(
+        &self,
+        line: &mut dyn FnMut(usize, TextLine),
+        cell: &mut dyn FnMut(usize, usize, char, TextAttr),
+    ) {
         let vram = &self.memory.vram[self.memory.mapper.vram_offset_display() as usize..];
         let mapper = &self.memory.mapper;
 
@@ -213,23 +217,26 @@ impl Display for System {
                 if row >= render.smooth_row {
                     render.row_idx = render.row_idx.saturating_sub(1);
                 }
-            },
-            |render, mut column, mut c, attr| {
-                if column == 0 && render.row_flags.is_80 {
-                    for x in 80..132 {
-                        cell(
-                            render.row_idx,
-                            x,
-                            ' ',
-                            if render.row_flags.invert {
-                                TextAttr::REVERSE
-                            } else {
-                                TextAttr::NONE
-                            },
-                        );
-                    }
-                }
 
+                let size = if render.row_flags.double_height_top {
+                    LineSize::DoubleHeightTop
+                } else if render.row_flags.double_height_bottom {
+                    LineSize::DoubleHeightBottom
+                } else if render.row_flags.double_width {
+                    LineSize::DoubleWidth
+                } else {
+                    LineSize::Single
+                };
+                line(
+                    render.row_idx,
+                    TextLine {
+                        size,
+                        columns: if render.row_flags.is_80 { 80 } else { 132 },
+                        reverse: render.row_flags.invert,
+                    },
+                );
+            },
+            |render, column, mut c, attr| {
                 let mut style = TextAttr::NONE;
                 if attr.is_underline() {
                     style |= TextAttr::UNDERLINE;
@@ -241,10 +248,6 @@ impl Display for System {
                     style |= TextAttr::REVERSE;
                 }
 
-                if render.row_flags.double_width {
-                    column *= 2;
-                }
-
                 if render.row_flags.status_row && attr.is_upper_bit() {
                     c |= 0x800;
                 }
@@ -254,10 +257,6 @@ impl Display for System {
                     unicode::map_char(c).unwrap_or('.'),
                     style,
                 );
-
-                if render.row_flags.double_width {
-                    cell(render.row_idx, column as usize + 1, ' ', style);
-                }
             },
             render,
         );
