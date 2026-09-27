@@ -17,7 +17,7 @@ use i8051::sfr::{SFR_P1, SFR_P2, SFR_P3};
 use tracing::warn;
 
 use crate::host::keyboard::crossterm::{CrosstermKeyboard, KeyboardCommand};
-use crate::machine::generic::display::{Display, TextAttr};
+use crate::host::screen::text::TextScreen;
 use crate::machine::generic::keyboard::lk201_input::Lk201Input;
 use crate::machine::vt420::System;
 
@@ -50,25 +50,7 @@ impl<'a> Screen<'a> {
 impl<'a> Widget for Screen<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         if self.display_mode == DisplayMode::Normal {
-            self.system
-                .render_textbuffer(&mut |_, _| {}, &mut |row, column, ch, attr| {
-                    if let Some(cell) =
-                        buf.cell_mut((area.left() + column as u16, area.top() + row as u16))
-                    {
-                        let mut style = Style::default();
-                        if attr.contains(TextAttr::UNDERLINE) {
-                            style = style.underlined();
-                        }
-                        if attr.contains(TextAttr::BOLD) {
-                            style = style.bold();
-                        }
-                        if attr.contains(TextAttr::REVERSE) {
-                            style = style.reversed();
-                        }
-                        cell.set_char(ch);
-                        cell.set_style(style);
-                    }
-                });
+            TextScreen::new(self.system).render(area, buf);
             return;
         }
 
