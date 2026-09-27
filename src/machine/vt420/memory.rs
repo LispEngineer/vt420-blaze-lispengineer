@@ -158,6 +158,7 @@ pub struct RAM {
     pub sram: Box<[u8; 0x8000]>,  // 32kB
     pub vram: Box<[u8; 0x20000]>, // 128kB
     pub mapper: Mapper,
+    pub display_mapper: Mapper,
     pub peripheral: [u8; 0x100],
     pub rom_bank: Rc<Cell<u8>>,
     pub sync: SyncHolder,
@@ -175,6 +176,7 @@ impl RAM {
             sram,
             vram,
             mapper,
+            display_mapper: mapper,
             peripheral,
             rom_bank,
             sync,
@@ -334,6 +336,9 @@ impl MemoryMapper for RAM {
                 }
 
                 self.mapper.set(offset as _, value);
+                if !self.mapper.is_status_bar_phase() {
+                    self.display_mapper = self.mapper;
+                }
             }
             MemoryTarget::DUART => {
                 let reg = WriteRegister::try_from(offset as u8).unwrap();

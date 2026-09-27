@@ -6,11 +6,6 @@ use crate::machine::vt420::video::{RowFlags, decode_font, decode_font_downloadab
 
 impl Display for System {
     fn render_framebuffer(&self, frame: &mut [u8]) {
-        // Don't update during the status row phase (we shouldn't get here)
-        if self.memory.mapper.is_status_bar_phase() {
-            return;
-        }
-
         #[derive(Default)]
         struct Render<'a> {
             row: usize,
@@ -23,18 +18,18 @@ impl Display for System {
         }
         let render = Render {
             smooth: (
-                self.memory.mapper.get(0),
-                self.memory.mapper.get(1),
-                self.memory.mapper.get(2),
+                self.memory.display_mapper.get(0),
+                self.memory.display_mapper.get(1),
+                self.memory.display_mapper.get(2),
             ),
             frame,
-            chargen_disabled: self.memory.mapper.disable_chargen(),
+            chargen_disabled: self.memory.display_mapper.disable_chargen(),
             ..Default::default()
         };
         let mut font = [0_u16; 16];
         let render = decode_vram(
-            &self.memory.vram[self.memory.mapper.vram_offset_display() as usize..],
-            &self.memory.mapper,
+            &self.memory.vram[self.memory.display_mapper.vram_offset_display() as usize..],
+            &self.memory.display_mapper,
             |render, row, attr, row_flags| {
                 render.row += render.row_flags.row_height as usize;
                 render.row_offset += 800 * 4 * render.row_flags.row_height as usize;
@@ -76,7 +71,7 @@ impl Display for System {
                     let neg = DEFAULT_COLOR.background;
 
                     if !render.row_flags.status_row && attr.is_upper_bit() {
-                        pos = if self.memory.mapper.is_blink() {
+                        pos = if self.memory.display_mapper.is_blink() {
                             if attr.is_bold() {
                                 DEFAULT_COLOR.foreground
                             } else {
@@ -188,8 +183,8 @@ impl Display for System {
         line: &mut dyn FnMut(usize, TextLine),
         cell: &mut dyn FnMut(usize, usize, char, TextAttr),
     ) {
-        let vram = &self.memory.vram[self.memory.mapper.vram_offset_display() as usize..];
-        let mapper = &self.memory.mapper;
+        let vram = &self.memory.vram[self.memory.display_mapper.vram_offset_display() as usize..];
+        let mapper = &self.memory.display_mapper;
 
         #[derive(Default)]
         struct Render {

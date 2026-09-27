@@ -54,9 +54,9 @@ impl<'a> Widget for Screen<'a> {
             return;
         }
 
-        let vram =
-            &self.system.memory.vram[self.system.memory.mapper.vram_offset_display() as usize..];
-        let mapper = &self.system.memory.mapper;
+        let vram = &self.system.memory.vram
+            [self.system.memory.display_mapper.vram_offset_display() as usize..];
+        let mapper = &self.system.memory.display_mapper;
         let vram_base = 0;
 
         let mut line = [0_u16; 256];

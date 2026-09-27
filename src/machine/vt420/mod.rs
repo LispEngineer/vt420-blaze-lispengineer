@@ -262,7 +262,7 @@ impl System {
         let text = String::with_capacity(132 * 25);
         decode_vram(
             self.memory.vram.as_ref(),
-            &self.memory.mapper,
+            &self.memory.display_mapper,
             |text, _, _, _| {
                 text.push('\n');
             },

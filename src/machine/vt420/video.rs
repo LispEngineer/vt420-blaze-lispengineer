@@ -32,6 +32,7 @@ pub const TIMING_70HZ: Timing = Timing {
     v_bp: 100, // Vtot = 536, Vtot_blank = 119
 };
 
+#[derive(Clone, Copy)]
 pub struct Mapper {
     pub mapper: [u8; 16],
     pub mapper2: [u8; 16], // 6, 9, a, b, c can be written twice
