@@ -7,9 +7,19 @@ use ssu::session::SessionConfig;
 
 use crate::machine::TerminalSystem;
 use crate::machine::generic::rom::ROM;
-use crate::machine::vt52x::memory::{Ports, RAM};
+use crate::machine::vt52x::memory::{Ports, RAM, Vt5xx};
 
 mod memory;
+
+fn rom_model(rom: &[u8]) -> Vt5xx {
+    if rom.windows(12).any(|w| w == b"\x05VT525\x05VT100") {
+        Vt5xx::Vt525
+    } else if rom.windows(6).any(|w| w == b"DEC510") {
+        Vt5xx::Vt510
+    } else {
+        Vt5xx::Vt520
+    }
+}
 
 pub struct System {
     pub memory: RAM,
@@ -30,8 +40,10 @@ impl System {
         comm2: Option<SessionConfig>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let (serial, in_kbd, out_kbd) = Serial::new(60);
+        let model = rom_model(&rom);
         let rom = ROM::new(rom);
-        let ports = Ports::new(rom.bank.clone());
+        let mut ports = Ports::new(rom.bank.clone());
+        ports.model = model;
 
         Ok(Self {
             memory: Default::default(),

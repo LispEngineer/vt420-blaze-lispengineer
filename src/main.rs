@@ -222,11 +222,15 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ),
         MachineType::VT52x => run_vt52x(
             args,
+            #[cfg(feature = "embed-rom")]
+            include_bytes!("../roms/vt520/23-010ED-00.bin"),
             #[cfg(feature = "tui")]
             trace_collector,
         ),
-        MachineType::VT510 => run_vt510(
+        MachineType::VT510 => run_vt52x(
             args,
+            #[cfg(feature = "embed-rom")]
+            include_bytes!("../roms/vt510/23-032ED-00.bin"),
             #[cfg(feature = "tui")]
             trace_collector,
         ),
@@ -371,6 +375,7 @@ fn run_vt420(
 
 fn run_vt52x(
     args: Args,
+    #[cfg(feature = "embed-rom")] embedded_rom: &'static [u8],
     #[cfg(feature = "tui")] trace_collector: TracingCollector,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("VT52x Emulator starting...");
@@ -390,7 +395,7 @@ fn run_vt52x(
     };
 
     #[cfg(feature = "embed-rom")]
-    let mut rom = { include_bytes!("../roms/vt520/23-010ED-00.bin").to_vec() };
+    let mut rom = embedded_rom.to_vec();
     #[cfg(feature = "embed-rom")]
     if let Some(rom_path) = args.rom {
         use std::fs;
@@ -409,86 +414,6 @@ fn run_vt52x(
 
     let vt52x = machine::vt52x::System::new(rom, args.nvr.as_deref(), args.comm1, args.comm2)?;
     let mut system = System::new(vt52x);
-
-    info!("Starting CPU execution...");
-    let mut cpu = Cpu::new();
-    #[cfg(not(target_arch = "wasm32"))]
-    let start_time = Instant::now();
-    info!("CPU initialized, PC = 0x{:04X}", cpu.pc_ext(&system));
-
-    #[cfg(feature = "tui")]
-    let debugger = if args.debug {
-        let mut debugger = Debugger::new(Default::default(), trace_collector)?;
-        for breakpoint in args.breakpoint {
-            debugger.breakpoints_mut().insert(breakpoint);
-        }
-        Some(debugger)
-    } else {
-        None
-    };
-
-    let instruction_count = if args.benchmark {
-        for _ in 0..100_000_000 {
-            system.step(&mut cpu);
-        }
-        system.instruction_count
-    } else {
-        match args.display.unwrap_or(Display::Headless) {
-            Display::Headless => host::screen::headless::run(
-                system,
-                cpu,
-                #[cfg(feature = "tui")]
-                debugger,
-            )?,
-            _ => {
-                unimplemented!()
-            }
-        }
-    };
-
-    Ok(())
-}
-
-fn run_vt510(
-    args: Args,
-    #[cfg(feature = "tui")] trace_collector: TracingCollector,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    info!("VT510 Emulator starting...");
-
-    #[cfg(not(feature = "embed-rom"))]
-    let rom = {
-        use std::fs;
-        info!("Loading ROM file: {:?}...", args.rom);
-
-        // Check if ROM file exists
-        if !args.rom.exists() {
-            info!("Error: ROM file does not exist: {:?}", args.rom);
-            std::process::exit(1);
-        }
-
-        fs::read(&args.rom)?
-    };
-
-    #[cfg(feature = "embed-rom")]
-    let mut rom = { include_bytes!("../roms/vt510/23-032ED-00.bin").to_vec() };
-    #[cfg(feature = "embed-rom")]
-    if let Some(rom_path) = args.rom {
-        use std::fs;
-        info!("Loading ROM file: {:?}...", rom_path);
-
-        // Check if ROM file exists
-        if !rom_path.exists() {
-            info!("Error: ROM file does not exist: {:?}", rom_path);
-            std::process::exit(1);
-        }
-
-        rom = fs::read(&rom_path)?;
-    };
-
-    info!("Configuring system...");
-
-    let vt510 = machine::vt510::System::new(rom, args.nvr.as_deref(), args.comm1, args.comm2)?;
-    let mut system = System::new(vt510);
 
     info!("Starting CPU execution...");
     let mut cpu = Cpu::new();

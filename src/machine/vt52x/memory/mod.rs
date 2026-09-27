@@ -5,6 +5,17 @@ use i8051::sfr::{SFR_P1, SFR_P2, SFR_P3};
 use i8051::{CpuView, MemoryMapper, PortMapper};
 use tracing::trace;
 
+mod vt51x;
+mod vt52x;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Vt5xx {
+    Vt510,
+    #[default]
+    Vt520,
+    Vt525,
+}
+
 #[derive(Default)]
 pub struct RAM {}
 
@@ -35,6 +46,8 @@ pub struct Ports {
     pub p3: u8,
     pub p3_read: u8,
     pub rom_bank: Rc<Cell<u8>>,
+    /// Selects the ROM bank pins (see `vt51x::rom_bank`).
+    pub model: Vt5xx,
 }
 
 impl Ports {
@@ -45,6 +58,7 @@ impl Ports {
             p3: 0xff,
             p3_read: 0b1111_1111,
             rom_bank,
+            model: Vt5xx::Vt520,
         }
     }
 
@@ -87,10 +101,10 @@ impl PortMapper for Ports {
     fn write(&mut self, (addr, value): Self::WriteValue) {
         match addr {
             SFR_P1 => {
-                let p1_4 = (value & (1 << 4)) != 0;
-                let p1_5 = (value & (1 << 5)) != 0;
-                let p1_6 = (value & (1 << 6)) != 0;
-                let bank = p1_4 as u8 | ((p1_5 as u8) << 1) | ((p1_6 as u8) << 2);
+                let bank = match self.model {
+                    Vt5xx::Vt510 => vt51x::rom_bank(value),
+                    Vt5xx::Vt520 | Vt5xx::Vt525 => vt52x::rom_bank(value),
+                };
                 self.rom_bank.set(bank);
                 self.p1 = value;
             }
