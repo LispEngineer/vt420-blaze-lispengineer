@@ -1,30 +1,17 @@
-use std::fs::{self};
 use std::io;
 use std::time::{Duration, Instant};
 
 use i8051::Cpu;
 use i8051_debug_tui::Debugger;
-use ratatui::buffer::Buffer;
+use ratatui::Frame;
 use ratatui::crossterm;
-use ratatui::layout::Offset;
-use ratatui::layout::Rect;
 use ratatui::prelude::CrosstermBackend;
-use ratatui::style::{Color, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::Widget;
-
-use i8051::sfr::{SFR_P1, SFR_P2, SFR_P3};
 use tracing::warn;
 
 use crate::host::keyboard::crossterm::{CrosstermKeyboard, KeyboardCommand};
-use crate::host::screen::text::TextScreen;
-use crate::machine::generic::keyboard::lk201_input::Lk201Input;
-use crate::machine::vt420::System;
-
-pub struct Screen<'a> {
-    system: &'a System,
-    display_mode: DisplayMode,
-}
+use crate::machine::TerminalSystem;
+use crate::machine::generic::display::Display;
+use crate::machine::generic::keyboard::KeyboardInput;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum DisplayMode {
@@ -33,186 +20,32 @@ pub enum DisplayMode {
     Bytes,
 }
 
-impl<'a> Screen<'a> {
-    pub fn new(system: &'a System) -> Self {
-        Self {
-            system,
-            display_mode: DisplayMode::Normal,
-        }
+pub struct DrawOptions {
+    pub mode: DisplayMode,
+    pub show_mapper: bool,
+    pub show_vram: bool,
+}
+
+pub trait TextTerminal: TerminalSystem + Display {
+    fn keyboard_input(&self) -> Box<dyn KeyboardInput>;
+    fn instruction_count(&self) -> usize;
+    fn redraw_interval(&self) -> usize;
+    fn draw(&self, cpu: &Cpu, options: &DrawOptions, frame: &mut Frame);
+
+    fn check_step(&self, _pc: u32, _new_pc: u32) {}
+
+    fn dump_vram(&self) -> io::Result<()> {
+        Ok(())
     }
 
-    pub fn display_mode(mut self, mode: DisplayMode) -> Self {
-        self.display_mode = mode;
-        self
+    #[cfg(all(feature = "pc-trace", not(target_arch = "wasm32")))]
+    fn flush_pc_trace_now(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
-impl<'a> Widget for Screen<'a> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        if self.display_mode == DisplayMode::Normal {
-            TextScreen::new(self.system).render(area, buf);
-            return;
-        }
-
-        let vram = &self.system.memory.vram
-            [self.system.memory.display_mapper.vram_offset_display() as usize..];
-        let mapper = &self.system.memory.display_mapper;
-        let vram_base = 0;
-
-        let mut line = [0_u16; 256];
-        let mut attr = [0_u8; 256];
-
-        let Some(rows) = mapper.row_count(vram) else {
-            return;
-        };
-
-        for mut row_idx in 0..=rows as u16 {
-            let row = ((vram[vram_base + row_idx as usize * 2] as u16) >> 1) << 8;
-            if row == 0 {
-                continue;
-            }
-            // Handle smooth scrolling by chopping the top row
-            if mapper.get(2) != 0 {
-                if row_idx as u8 == mapper.get(0) {
-                    continue;
-                }
-                if row_idx as u8 > mapper.get(0) {
-                    row_idx -= 1;
-                }
-            }
-            // Bit 2: double width
-            // Bit 1: swap between screen 0 and screen 1 attributes
-            let row_attrs = vram[vram_base + row_idx as usize * 2 + 1];
-            let is_double_width = (row_attrs >> 2) & 3 != 0;
-            // If true, force 132 characters per line
-            let row_is_132 = vram[vram_base + row_idx as usize * 2] & 1 != 0;
-
-            // Decode 12-bit character codes from packed 3-byte sequences
-            let mut b = 0;
-            let mut j = 0;
-
-            // First segment: 72 chars, bytes 0-107
-            for i in 0..108 {
-                let char = vram[row as usize + i];
-                match i % 3 {
-                    0 => b = char as u16,
-                    1 => {
-                        b |= ((char & 0xf) as u16) << 8;
-                        line[j] = b;
-                        j += 1;
-                        b = ((char & 0xf0) as u16) >> 4;
-                    }
-                    _ => {
-                        b |= (char as u16) << 4;
-                        line[j] = b;
-                        j += 1;
-                    }
-                }
-            }
-            // Second segment: bytes 128-220
-            for i in 128..221 {
-                let char = vram[row as usize + i];
-                let i = i + 1;
-                match i % 3 {
-                    0 => b = char as u16,
-                    1 => {
-                        b |= ((char & 0xf) as u16) << 8;
-                        line[j] = b;
-                        j += 1;
-                        b = ((char & 0xf0) as u16) >> 4;
-                    }
-                    _ => {
-                        b |= (char as u16) << 4;
-                        line[j] = b;
-                        j += 1;
-                    }
-                }
-            }
-
-            // Extract attributes
-            for i in 1..133 {
-                let bit = ((i % 4) * 2) as u8;
-                attr[i - 1] = (vram[row as usize + 0xdd + (i / 4)] >> bit) & 0x3;
-                let cell_attr = ((line[i - 1] & 0xf00) >> 8) as u8;
-                attr[i - 1] |= cell_attr << 2;
-            }
-
-            // Render the line
-            match self.display_mode {
-                DisplayMode::Bytes => {
-                    let row_header = format!("{:02X}|", row >> 8);
-                    let mut col = 0;
-                    for (i, b) in vram[row as usize..row as usize + 256].iter().enumerate() {
-                        if col < area.width {
-                            let hex_str = format!("{b:02X}");
-                            for ch in hex_str.chars() {
-                                if let Some(cell) =
-                                    buf.cell_mut((area.left() + col, area.top() + row_idx))
-                                {
-                                    cell.set_symbol(&ch.to_string());
-                                    let mut style = if i % 2 == 0 {
-                                        Style::default()
-                                    } else {
-                                        Style::default().bold()
-                                    };
-                                    if i > 107 && i < 128 {
-                                        style = style.fg(Color::Blue);
-                                    }
-                                    if i > 221 {
-                                        style = style.fg(Color::Red);
-                                    }
-                                    cell.set_style(style);
-                                }
-                                col += 1;
-                            }
-                        }
-                    }
-                }
-                DisplayMode::NibbleTriplet => {
-                    let row_header = format!(
-                        "{:02X}{:02X}|",
-                        vram[vram_base + row_idx as usize * 2],
-                        vram[vram_base + row_idx as usize * 2 + 1]
-                    );
-                    let mut col = 0;
-                    for ch in row_header.chars() {
-                        if col < area.width {
-                            if let Some(cell) =
-                                buf.cell_mut((area.left() + col, area.top() + row_idx))
-                            {
-                                cell.set_symbol(&ch.to_string());
-                                cell.set_style(Style::default());
-                            }
-                            col += 1;
-                        }
-                    }
-                    for (i, char_code) in line.iter().take(132).enumerate() {
-                        let hex_str = format!("{char_code:03X}");
-                        for ch in hex_str.chars() {
-                            if col < area.width {
-                                if let Some(cell) =
-                                    buf.cell_mut((area.left() + col, area.top() + row_idx))
-                                {
-                                    cell.set_symbol(&ch.to_string());
-                                    cell.set_style(if i % 2 == 0 {
-                                        Style::default()
-                                    } else {
-                                        Style::default().bold()
-                                    });
-                                }
-                                col += 1;
-                            }
-                        }
-                    }
-                }
-                DisplayMode::Normal => {}
-            }
-        }
-    }
-}
-
-pub fn run(
-    system: System,
+pub fn run<S: TextTerminal>(
+    system: S,
     cpu: Cpu,
     debugger: Option<Debugger>,
     show_mapper: bool,
@@ -225,146 +58,72 @@ pub fn run(
         crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
     )?;
 
-    let res = run_inner(system, cpu, debugger, show_mapper, show_vram)?;
+    let options = DrawOptions {
+        mode: DisplayMode::Normal,
+        show_mapper,
+        show_vram,
+    };
+    let result = run_inner(system, cpu, debugger, options);
 
     crossterm::terminal::disable_raw_mode()?;
     crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen,)?;
-    Ok(res)
+    result
 }
 
-fn run_inner(
-    mut system: System,
+fn run_inner<S: TextTerminal>(
+    mut system: S,
     mut cpu: Cpu,
-    debugger: Option<Debugger>,
-    show_mapper: bool,
-    show_vram: bool,
+    _debugger: Option<Debugger>,
+    mut options: DrawOptions,
 ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     let mut running = true;
-    let mut hex = DisplayMode::Normal;
     let mut keyboard = CrosstermKeyboard::default();
-    let mut lk201 = Lk201Input::new(system.keyboard.sender());
+    let mut input = system.keyboard_input();
     let mut terminal = ratatui::Terminal::new(CrosstermBackend::new(io::stdout()))?;
+    let redraw_interval = system.redraw_interval();
     loop {
         if running {
             let pc = cpu.pc_ext(&system);
             system.step(&mut cpu);
-
-            let new_pc = cpu.pc_ext(&system);
-            if new_pc & 0xffff == 0 {
-                warn!("CPU reset detected at PC = 0x{:04X}", pc);
-            }
-            if (0xbb..0x110).contains(&new_pc) {
-                warn!(
-                    "CPU weird step ({:02X}) detected at PC = 0x{:04X}",
-                    new_pc, pc
-                );
-            }
+            system.check_step(pc, cpu.pc_ext(&system));
         }
 
-        if system.instruction_count % 0x1000 == 0 || !running {
-            if crossterm::event::poll(Duration::from_millis(0))? {
+        if system.instruction_count() % redraw_interval == 0 || !running {
+            while crossterm::event::poll(Duration::from_millis(0))? {
                 let start = Instant::now();
                 let event = crossterm::event::read()?;
                 if start.elapsed() > Duration::from_millis(100) {
                     warn!("Event read took too long: {:?}", start.elapsed());
                 }
-                match keyboard.update_keyboard(&event, &mut lk201) {
+                match keyboard.update_keyboard(&event, &mut *input) {
                     Some(KeyboardCommand::ToggleRun) => {
                         running = !running;
                     }
                     Some(KeyboardCommand::ToggleHexMode) => {
-                        hex = match hex {
+                        options.mode = match options.mode {
                             DisplayMode::Normal => DisplayMode::NibbleTriplet,
                             DisplayMode::NibbleTriplet => DisplayMode::Bytes,
                             DisplayMode::Bytes => DisplayMode::Normal,
                         };
                     }
                     Some(KeyboardCommand::DumpVRAM) => {
-                        fs::write("/tmp/vram.bin", &system.memory.vram[0..])?;
+                        system.dump_vram()?;
                     }
                     #[cfg(all(feature = "pc-trace", not(target_arch = "wasm32")))]
                     Some(KeyboardCommand::FlushPCTrace) => {
-                        if let Some(trace) = &mut system.pc_trace {
-                            trace.flush_now()?;
-                        }
+                        system.flush_pc_trace_now()?;
                     }
                     Some(KeyboardCommand::Quit) => {
-                        break;
+                        return Ok(system.instruction_count());
                     }
                     None => {}
                 }
             }
 
-            // Skip redrawing if the chargen is disabled
-            if system.memory.mapper.get(6) & 0xf0 != 0xf0 {
-                terminal.draw(|f| {
-                    let screen = Screen::new(&system).display_mode(hex);
-                    f.render_widget(screen, f.area());
-                    let stage = Span::styled(
-                        format!(
-                            "{:b}/{:02X}",
-                            cpu.internal_ram[0x1f], cpu.internal_ram[0x7e]
-                        ),
-                        Style::default().fg(Color::LightBlue),
-                    );
-                    let stage = stage.into_right_aligned_line();
-                    f.render_widget(stage, f.area());
-
-                    if show_mapper {
-                        let mut mapper_line = Line::default();
-                        for i in 0..16 {
-                            let attr = system.memory.mapper.get(i);
-                            let style = Style::default().fg(Color::Indexed(attr));
-                            let text = if i == 6 || i == 9 || i == 10 || i == 11 || i == 12 {
-                                Span::styled(
-                                    format!(
-                                        "{:02X}/{:02X} ",
-                                        system.memory.mapper.get(i),
-                                        system.memory.mapper.get2(i)
-                                    ),
-                                    style,
-                                )
-                            } else {
-                                Span::styled(format!("{:02X} ", system.memory.mapper.get(i)), style)
-                            };
-                            mapper_line.push_span(text);
-                        }
-                        mapper_line.push_span(format!(
-                            "{:02X} {:02X} {:02X}",
-                            cpu.sfr(SFR_P1, &system),
-                            cpu.sfr(SFR_P2, &system),
-                            cpu.sfr(SFR_P3, &system)
-                        ));
-                        f.render_widget(mapper_line, f.area());
-                    }
-
-                    if show_vram {
-                        let vram = &system.memory.vram;
-                        for i in 0..16 {
-                            let mut vram_line = Line::default();
-                            for j in 0..32 {
-                                let attr = vram[i * 32 + j];
-                                let style = Style::default().fg(Color::Indexed(attr));
-                                let text = Span::styled(format!("{attr:02X} "), style);
-                                vram_line.push_span(text);
-                            }
-                            f.render_widget(
-                                vram_line,
-                                f.area().offset(Offset {
-                                    x: 0,
-                                    y: (f.area().height as i32 - 16) + i as i32,
-                                }),
-                            );
-                        }
-                    }
-                })?;
-            }
+            terminal.draw(|f| system.draw(&cpu, &options, f))?;
         }
 
         #[cfg(all(feature = "pc-trace", not(target_arch = "wasm32")))]
-        if let Some(trace) = &mut system.pc_trace {
-            trace.flush_if_due();
-        }
+        system.flush_pc_trace_if_due();
     }
-    Ok(system.instruction_count)
 }
