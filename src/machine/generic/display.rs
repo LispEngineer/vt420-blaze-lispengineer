@@ -71,4 +71,3 @@ pub trait Display {
         cell: &mut dyn FnMut(usize, usize, char, TextAttr),
     );
 }
-}

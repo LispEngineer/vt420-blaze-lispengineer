@@ -47,6 +47,8 @@ struct Terminal {
     input: WinitInputHelper,
     /// Game pause state.
     paused: bool,
+    /// Window title.
+    title: String,
     /// Keyboard input.
     keyboard: Box<dyn KeyboardInput>,
     /// Frame policy.
@@ -59,6 +61,7 @@ struct Terminal {
 
 impl Terminal {
     fn new(
+        title: String,
         keyboard: Box<dyn KeyboardInput>,
         proxy: EventLoopProxy<Pixels<'static>>,
         render: Box<dyn FnMut(&mut [u8])>,
@@ -69,6 +72,7 @@ impl Terminal {
             input: WinitInputHelper::new(),
             paused: false,
             frame_policy: FramePolicy::new(),
+            title,
             keyboard,
             render,
             step,
@@ -90,7 +94,7 @@ impl Terminal {
     fn init_window(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         let window = match event_loop.create_window(
             Window::default_attributes()
-                .with_title("VT420")
+                .with_title(&self.title)
                 .with_inner_size(LogicalSize::new(REAL_WIDTH as f64, REAL_HEIGHT as f64))
                 .with_min_inner_size(LogicalSize::new(REAL_WIDTH as f64, REAL_HEIGHT as f64)),
         ) {
@@ -306,6 +310,7 @@ fn log_pixels_error(e: Error) {
 }
 
 pub fn main(
+    title: &str,
     keyboard: Box<dyn KeyboardInput>,
     render: impl FnMut(&mut [u8]) + 'static,
     step: impl FnMut() + 'static,
@@ -314,7 +319,13 @@ pub fn main(
         .build()
         .map_err(|e| Error::UserDefined(Box::new(e)))?;
     let proxy = event_loop.create_proxy();
-    let mut terminal = Terminal::new(keyboard, proxy, Box::new(render), Box::new(step));
+    let mut terminal = Terminal::new(
+        title.to_string(),
+        keyboard,
+        proxy,
+        Box::new(render),
+        Box::new(step),
+    );
 
     #[cfg(target_arch = "wasm32")]
     {

@@ -50,24 +50,25 @@ impl<'a> Screen<'a> {
 impl<'a> Widget for Screen<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         if self.display_mode == DisplayMode::Normal {
-            self.system.render_textbuffer(&mut |row, column, ch, attr| {
-                if let Some(cell) =
-                    buf.cell_mut((area.left() + column as u16, area.top() + row as u16))
-                {
-                    let mut style = Style::default();
-                    if attr.contains(TextAttr::UNDERLINE) {
-                        style = style.underlined();
+            self.system
+                .render_textbuffer(&mut |_, _| {}, &mut |row, column, ch, attr| {
+                    if let Some(cell) =
+                        buf.cell_mut((area.left() + column as u16, area.top() + row as u16))
+                    {
+                        let mut style = Style::default();
+                        if attr.contains(TextAttr::UNDERLINE) {
+                            style = style.underlined();
+                        }
+                        if attr.contains(TextAttr::BOLD) {
+                            style = style.bold();
+                        }
+                        if attr.contains(TextAttr::REVERSE) {
+                            style = style.reversed();
+                        }
+                        cell.set_char(ch);
+                        cell.set_style(style);
                     }
-                    if attr.contains(TextAttr::BOLD) {
-                        style = style.bold();
-                    }
-                    if attr.contains(TextAttr::REVERSE) {
-                        style = style.reversed();
-                    }
-                    cell.set_char(ch);
-                    cell.set_style(style);
-                }
-            });
+                });
             return;
         }
 

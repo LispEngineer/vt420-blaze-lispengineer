@@ -109,6 +109,7 @@ pub fn run(
 
     let system_clone = system.clone();
     crate::host::wgpu::main(
+        "VT420",
         keyboard,
         move |frame| system_clone.borrow().render_framebuffer(frame),
         stepper,
@@ -166,6 +167,7 @@ fn run_debugger(
 
     let system_clone = system.clone();
     crate::host::wgpu::main(
+        "VT420",
         keyboard,
         move |frame| system_clone.borrow().render_framebuffer(frame),
         stepper,
