@@ -5,42 +5,63 @@ use i8051::Cpu;
 use i8051_debug_tui::Debugger;
 use ratatui::Frame;
 use ratatui::crossterm;
+use ratatui::layout::Offset;
 use ratatui::prelude::CrosstermBackend;
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
 use tracing::warn;
 
 use crate::host::keyboard::crossterm::{CrosstermKeyboard, KeyboardCommand};
-use crate::machine::TerminalSystem;
-use crate::machine::generic::display::Display;
-use crate::machine::generic::keyboard::KeyboardInput;
+use crate::host::screen::text::TextScreen;
+use crate::host::screen::text_terminal::{
+    Anchor, DisplayMode, DrawOptions, TextStyle, TextTerminal,
+};
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum DisplayMode {
-    Normal,
-    NibbleTriplet,
-    Bytes,
+fn style(style: TextStyle) -> Style {
+    let mut out = Style::default();
+    if style.bold {
+        out = out.bold();
+    }
+    if let Some(color) = style.color {
+        out = out.fg(Color::Indexed(color));
+    }
+    out
 }
 
-pub struct DrawOptions {
-    pub mode: DisplayMode,
-    pub show_mapper: bool,
-    pub show_vram: bool,
-}
+fn draw<S: TextTerminal>(system: &S, cpu: &Cpu, options: &DrawOptions, f: &mut Frame) {
+    let area = f.area();
 
-pub trait TextTerminal: TerminalSystem + Display {
-    fn keyboard_input(&self) -> Box<dyn KeyboardInput>;
-    fn instruction_count(&self) -> usize;
-    fn redraw_interval(&self) -> usize;
-    fn draw(&self, cpu: &Cpu, options: &DrawOptions, frame: &mut Frame);
-
-    fn check_step(&self, _pc: u32, _new_pc: u32) {}
-
-    fn dump_vram(&self) -> io::Result<()> {
-        Ok(())
+    if options.mode == DisplayMode::Normal {
+        f.render_widget(TextScreen::new(system), area);
+    } else {
+        let buf = f.buffer_mut();
+        system.debug_cells(options.mode, &mut |row, col, ch, cell_style| {
+            if row >= area.height as usize || col >= area.width as usize {
+                return;
+            }
+            if let Some(cell) = buf.cell_mut((area.left() + col as u16, area.top() + row as u16)) {
+                cell.set_char(ch);
+                cell.set_style(style(cell_style));
+            }
+        });
     }
 
-    #[cfg(all(feature = "pc-trace", not(target_arch = "wasm32")))]
-    fn flush_pc_trace_now(&mut self) -> io::Result<()> {
-        Ok(())
+    for overlay in system.overlays(cpu, options) {
+        let line = Line::from(
+            overlay
+                .spans
+                .into_iter()
+                .map(|(text, span_style)| Span::styled(text, style(span_style)))
+                .collect::<Vec<_>>(),
+        );
+        match overlay.anchor {
+            Anchor::Top => f.render_widget(line, area),
+            Anchor::TopRight => f.render_widget(line.right_aligned(), area),
+            Anchor::Bottom(lines) => {
+                let y = (area.height as usize).saturating_sub(lines) as i32;
+                f.render_widget(line, area.offset(Offset { x: 0, y }));
+            }
+        }
     }
 }
 
@@ -120,7 +141,7 @@ fn run_inner<S: TextTerminal>(
                 }
             }
 
-            terminal.draw(|f| system.draw(&cpu, &options, f))?;
+            terminal.draw(|f| draw(&system, &cpu, &options, f))?;
         }
 
         #[cfg(all(feature = "pc-trace", not(target_arch = "wasm32")))]

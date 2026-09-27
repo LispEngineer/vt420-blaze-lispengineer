@@ -2,7 +2,6 @@ pub mod breakpoints;
 pub mod framebuffer;
 pub mod memory;
 pub mod static_analysis;
-#[cfg(feature = "tui")]
 mod text;
 pub mod unicode;
 pub mod video;

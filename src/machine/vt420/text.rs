@@ -3,200 +3,23 @@ use std::io;
 
 use i8051::Cpu;
 use i8051::sfr::{SFR_P1, SFR_P2, SFR_P3};
-use ratatui::Frame;
-use ratatui::buffer::Buffer;
-use ratatui::layout::{Offset, Rect};
-use ratatui::style::{Color, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::Widget;
 use tracing::warn;
 
-use crate::host::screen::ratatui::{DisplayMode, DrawOptions, TextTerminal};
-use crate::host::screen::text::TextScreen;
+use crate::host::screen::text_terminal::{
+    Anchor, DisplayMode, DrawOptions, Overlay, TextStyle, TextTerminal,
+};
 use crate::machine::generic::keyboard::KeyboardInput;
 use crate::machine::generic::keyboard::lk201_input::Lk201Input;
 use crate::machine::vt420::System as Vt420;
 
-pub struct Screen<'a> {
-    system: &'a Vt420,
-    display_mode: DisplayMode,
-}
+const BLUE: u8 = 4;
+const RED: u8 = 1;
+const LIGHT_BLUE: u8 = 12;
 
-impl<'a> Screen<'a> {
-    pub fn new(system: &'a Vt420) -> Self {
-        Self {
-            system,
-            display_mode: DisplayMode::Normal,
-        }
-    }
-
-    pub fn display_mode(mut self, mode: DisplayMode) -> Self {
-        self.display_mode = mode;
-        self
-    }
-}
-
-impl<'a> Widget for Screen<'a> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        if self.display_mode == DisplayMode::Normal {
-            TextScreen::new(self.system).render(area, buf);
-            return;
-        }
-
-        let vram = &self.system.memory.vram
-            [self.system.memory.display_mapper.vram_offset_display() as usize..];
-        let mapper = &self.system.memory.display_mapper;
-        let vram_base = 0;
-
-        let mut line = [0_u16; 256];
-        let mut attr = [0_u8; 256];
-
-        let Some(rows) = mapper.row_count(vram) else {
-            return;
-        };
-
-        for mut row_idx in 0..=rows as u16 {
-            let row = ((vram[vram_base + row_idx as usize * 2] as u16) >> 1) << 8;
-            if row == 0 {
-                continue;
-            }
-            // Handle smooth scrolling by chopping the top row
-            if mapper.get(2) != 0 {
-                if row_idx as u8 == mapper.get(0) {
-                    continue;
-                }
-                if row_idx as u8 > mapper.get(0) {
-                    row_idx -= 1;
-                }
-            }
-            // Bit 2: double width
-            // Bit 1: swap between screen 0 and screen 1 attributes
-            let row_attrs = vram[vram_base + row_idx as usize * 2 + 1];
-            let is_double_width = (row_attrs >> 2) & 3 != 0;
-            // If true, force 132 characters per line
-            let row_is_132 = vram[vram_base + row_idx as usize * 2] & 1 != 0;
-
-            // Decode 12-bit character codes from packed 3-byte sequences
-            let mut b = 0;
-            let mut j = 0;
-
-            // First segment: 72 chars, bytes 0-107
-            for i in 0..108 {
-                let char = vram[row as usize + i];
-                match i % 3 {
-                    0 => b = char as u16,
-                    1 => {
-                        b |= ((char & 0xf) as u16) << 8;
-                        line[j] = b;
-                        j += 1;
-                        b = ((char & 0xf0) as u16) >> 4;
-                    }
-                    _ => {
-                        b |= (char as u16) << 4;
-                        line[j] = b;
-                        j += 1;
-                    }
-                }
-            }
-            // Second segment: bytes 128-220
-            for i in 128..221 {
-                let char = vram[row as usize + i];
-                let i = i + 1;
-                match i % 3 {
-                    0 => b = char as u16,
-                    1 => {
-                        b |= ((char & 0xf) as u16) << 8;
-                        line[j] = b;
-                        j += 1;
-                        b = ((char & 0xf0) as u16) >> 4;
-                    }
-                    _ => {
-                        b |= (char as u16) << 4;
-                        line[j] = b;
-                        j += 1;
-                    }
-                }
-            }
-
-            // Extract attributes
-            for i in 1..133 {
-                let bit = ((i % 4) * 2) as u8;
-                attr[i - 1] = (vram[row as usize + 0xdd + (i / 4)] >> bit) & 0x3;
-                let cell_attr = ((line[i - 1] & 0xf00) >> 8) as u8;
-                attr[i - 1] |= cell_attr << 2;
-            }
-
-            // Render the line
-            match self.display_mode {
-                DisplayMode::Bytes => {
-                    let row_header = format!("{:02X}|", row >> 8);
-                    let mut col = 0;
-                    for (i, b) in vram[row as usize..row as usize + 256].iter().enumerate() {
-                        if col < area.width {
-                            let hex_str = format!("{b:02X}");
-                            for ch in hex_str.chars() {
-                                if let Some(cell) =
-                                    buf.cell_mut((area.left() + col, area.top() + row_idx))
-                                {
-                                    cell.set_symbol(&ch.to_string());
-                                    let mut style = if i % 2 == 0 {
-                                        Style::default()
-                                    } else {
-                                        Style::default().bold()
-                                    };
-                                    if i > 107 && i < 128 {
-                                        style = style.fg(Color::Blue);
-                                    }
-                                    if i > 221 {
-                                        style = style.fg(Color::Red);
-                                    }
-                                    cell.set_style(style);
-                                }
-                                col += 1;
-                            }
-                        }
-                    }
-                }
-                DisplayMode::NibbleTriplet => {
-                    let row_header = format!(
-                        "{:02X}{:02X}|",
-                        vram[vram_base + row_idx as usize * 2],
-                        vram[vram_base + row_idx as usize * 2 + 1]
-                    );
-                    let mut col = 0;
-                    for ch in row_header.chars() {
-                        if col < area.width {
-                            if let Some(cell) =
-                                buf.cell_mut((area.left() + col, area.top() + row_idx))
-                            {
-                                cell.set_symbol(&ch.to_string());
-                                cell.set_style(Style::default());
-                            }
-                            col += 1;
-                        }
-                    }
-                    for (i, char_code) in line.iter().take(132).enumerate() {
-                        let hex_str = format!("{char_code:03X}");
-                        for ch in hex_str.chars() {
-                            if col < area.width {
-                                if let Some(cell) =
-                                    buf.cell_mut((area.left() + col, area.top() + row_idx))
-                                {
-                                    cell.set_symbol(&ch.to_string());
-                                    cell.set_style(if i % 2 == 0 {
-                                        Style::default()
-                                    } else {
-                                        Style::default().bold()
-                                    });
-                                }
-                                col += 1;
-                            }
-                        }
-                    }
-                }
-                DisplayMode::Normal => {}
-            }
-        }
+fn alternate(i: usize) -> TextStyle {
+    TextStyle {
+        bold: i % 2 != 0,
+        color: None,
     }
 }
 
@@ -237,64 +60,167 @@ impl TextTerminal for Vt420 {
         Ok(())
     }
 
-    fn draw(&self, cpu: &Cpu, options: &DrawOptions, f: &mut Frame) {
-        let screen = Screen::new(self).display_mode(options.mode);
-        f.render_widget(screen, f.area());
-        let stage = Span::styled(
-            format!(
-                "{:b}/{:02X}",
-                cpu.internal_ram[0x1f], cpu.internal_ram[0x7e]
-            ),
-            Style::default().fg(Color::LightBlue),
-        );
-        let stage = stage.into_right_aligned_line();
-        f.render_widget(stage, f.area());
+    fn overlays(&self, cpu: &Cpu, options: &DrawOptions) -> Vec<Overlay> {
+        let mut overlays = vec![Overlay {
+            anchor: Anchor::TopRight,
+            spans: vec![(
+                format!(
+                    "{:b}/{:02X}",
+                    cpu.internal_ram[0x1f], cpu.internal_ram[0x7e]
+                ),
+                TextStyle::color(LIGHT_BLUE),
+            )],
+        }];
 
         if options.show_mapper {
-            let mut mapper_line = Line::default();
-            for i in 0..16 {
-                let attr = self.memory.mapper.get(i);
-                let style = Style::default().fg(Color::Indexed(attr));
-                let text = if i == 6 || i == 9 || i == 10 || i == 11 || i == 12 {
-                    Span::styled(
-                        format!(
-                            "{:02X}/{:02X} ",
-                            self.memory.mapper.get(i),
-                            self.memory.mapper.get2(i)
-                        ),
-                        style,
-                    )
-                } else {
-                    Span::styled(format!("{:02X} ", self.memory.mapper.get(i)), style)
-                };
-                mapper_line.push_span(text);
-            }
-            mapper_line.push_span(format!(
-                "{:02X} {:02X} {:02X}",
-                cpu.sfr(SFR_P1, self),
-                cpu.sfr(SFR_P2, self),
-                cpu.sfr(SFR_P3, self)
+            let mapper = &self.memory.mapper;
+            let mut spans: Vec<(String, TextStyle)> = (0..16)
+                .map(|i| {
+                    let text = if matches!(i, 6 | 9 | 10 | 11 | 12) {
+                        format!("{:02X}/{:02X} ", mapper.get(i), mapper.get2(i))
+                    } else {
+                        format!("{:02X} ", mapper.get(i))
+                    };
+                    (text, TextStyle::color(mapper.get(i)))
+                })
+                .collect();
+            spans.push((
+                format!(
+                    "{:02X} {:02X} {:02X}",
+                    cpu.sfr(SFR_P1, self),
+                    cpu.sfr(SFR_P2, self),
+                    cpu.sfr(SFR_P3, self)
+                ),
+                TextStyle::default(),
             ));
-            f.render_widget(mapper_line, f.area());
+            overlays.push(Overlay {
+                anchor: Anchor::Top,
+                spans,
+            });
         }
 
         if options.show_vram {
             let vram = &self.memory.vram;
             for i in 0..16 {
-                let mut vram_line = Line::default();
-                for j in 0..32 {
-                    let attr = vram[i * 32 + j];
-                    let style = Style::default().fg(Color::Indexed(attr));
-                    let text = Span::styled(format!("{attr:02X} "), style);
-                    vram_line.push_span(text);
+                let spans = (0..32)
+                    .map(|j| {
+                        let attr = vram[i * 32 + j];
+                        (format!("{attr:02X} "), TextStyle::color(attr))
+                    })
+                    .collect();
+                overlays.push(Overlay {
+                    anchor: Anchor::Bottom(16 - i),
+                    spans,
+                });
+            }
+        }
+        overlays
+    }
+
+    fn debug_cells(&self, mode: DisplayMode, cell: &mut dyn FnMut(usize, usize, char, TextStyle)) {
+        let vram = &self.memory.vram[self.memory.display_mapper.vram_offset_display() as usize..];
+        let mapper = &self.memory.display_mapper;
+        let vram_base = 0;
+
+        let mut line = [0_u16; 256];
+
+        let Some(rows) = mapper.row_count(vram) else {
+            return;
+        };
+
+        for mut row_idx in 0..=rows as usize {
+            let row = ((vram[vram_base + row_idx * 2] as usize) >> 1) << 8;
+            if row == 0 {
+                continue;
+            }
+            // Handle smooth scrolling by chopping the top row
+            if mapper.get(2) != 0 {
+                if row_idx as u8 == mapper.get(0) {
+                    continue;
                 }
-                f.render_widget(
-                    vram_line,
-                    f.area().offset(Offset {
-                        x: 0,
-                        y: (f.area().height as i32 - 16) + i as i32,
-                    }),
-                );
+                if row_idx as u8 > mapper.get(0) {
+                    row_idx -= 1;
+                }
+            }
+
+            // Decode 12-bit character codes from packed 3-byte sequences
+            let mut b = 0;
+            let mut j = 0;
+
+            // First segment: 72 chars, bytes 0-107
+            for i in 0..108 {
+                let char = vram[row + i];
+                match i % 3 {
+                    0 => b = char as u16,
+                    1 => {
+                        b |= ((char & 0xf) as u16) << 8;
+                        line[j] = b;
+                        j += 1;
+                        b = ((char & 0xf0) as u16) >> 4;
+                    }
+                    _ => {
+                        b |= (char as u16) << 4;
+                        line[j] = b;
+                        j += 1;
+                    }
+                }
+            }
+            // Second segment: bytes 128-220
+            for i in 128..221 {
+                let char = vram[row + i];
+                let i = i + 1;
+                match i % 3 {
+                    0 => b = char as u16,
+                    1 => {
+                        b |= ((char & 0xf) as u16) << 8;
+                        line[j] = b;
+                        j += 1;
+                        b = ((char & 0xf0) as u16) >> 4;
+                    }
+                    _ => {
+                        b |= (char as u16) << 4;
+                        line[j] = b;
+                        j += 1;
+                    }
+                }
+            }
+
+            let mut col = 0;
+            let mut put = |ch: char, style: TextStyle| {
+                cell(row_idx, col, ch, style);
+                col += 1;
+            };
+            match mode {
+                DisplayMode::Bytes => {
+                    for (i, b) in vram[row..row + 256].iter().enumerate() {
+                        let mut style = alternate(i);
+                        if i > 107 && i < 128 {
+                            style.color = Some(BLUE);
+                        }
+                        if i > 221 {
+                            style.color = Some(RED);
+                        }
+                        for ch in format!("{b:02X}").chars() {
+                            put(ch, style);
+                        }
+                    }
+                }
+                DisplayMode::NibbleTriplet => {
+                    let row_header = format!(
+                        "{:02X}{:02X}|",
+                        vram[vram_base + row_idx * 2],
+                        vram[vram_base + row_idx * 2 + 1]
+                    );
+                    for ch in row_header.chars() {
+                        put(ch, TextStyle::default());
+                    }
+                    for (i, char_code) in line.iter().take(132).enumerate() {
+                        for ch in format!("{char_code:03X}").chars() {
+                            put(ch, alternate(i));
+                        }
+                    }
+                }
+                DisplayMode::Normal => {}
             }
         }
     }
