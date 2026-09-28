@@ -4,3 +4,5 @@
 pub(super) fn rom_bank(p1: u8) -> u8 {
     (p1 >> 4) & 0b111
 }
+
+pub(super) const COMM_TX_BYTE_INSTRUCTIONS: usize = 1000;

@@ -5,8 +5,11 @@ use i8051::sfr::{SFR_P1, SFR_P2, SFR_P3};
 use i8051::{CpuView, MemoryMapper, PortMapper};
 use tracing::trace;
 
+mod comm;
 mod vt51x;
 mod vt52x;
+
+use comm::CommChannel;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Vt5xx {
@@ -16,8 +19,49 @@ pub enum Vt5xx {
     Vt525,
 }
 
+impl Vt5xx {
+    pub fn is_vt51x(self) -> bool {
+        self == Vt5xx::Vt510
+    }
+}
+
 #[derive(Default)]
 pub struct RAM {}
+const PAGE_SIZE: usize = 0x8000;
+const PAGE_COUNT: usize = 64;
+const DRAM_SIZE: usize = PAGE_SIZE * PAGE_COUNT;
+pub const LOW_XDATA_BASE: usize = 4 * PAGE_SIZE;
+
+/// Registers on page 0x7Fxx.
+pub struct Registers {
+    pub regs: [u8; 256],
+}
+
+impl Default for Registers {
+    fn default() -> Self {
+        Self { regs: [0; 256] }
+    }
+}
+
+pub struct RAM {
+    pub regs: Registers,
+    pub comm: [CommChannel; 3],
+    pub dram: Vec<u8>,
+    pub model: Vt5xx,
+    pub int1: bool,
+}
+
+impl Default for RAM {
+    fn default() -> Self {
+        Self {
+            regs: Registers::default(),
+            comm: Default::default(),
+            dram: vec![0; DRAM_SIZE],
+            model: Vt5xx::default(),
+            int1: false,
+        }
+    }
+}
 
 impl MemoryMapper for RAM {
     type WriteValue = (u32, u8);
