@@ -45,7 +45,10 @@ impl SyncSession {
 mod tests {
     use super::*;
     use crate::session::{
-        Session, io_session::boot_io, loopback::LoopbackConfig, pipe::AnonymousPipeConfig,
+        Session,
+        io_session::{boot_io, IoSession, IoSessionReadWrite},
+        loopback::LoopbackConfig,
+        pipe::AnonymousPipeConfig,
     };
     use std::{thread, time::Duration};
 
@@ -77,5 +80,34 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         assert!(found);
+    }
+
+    /// Test that EOF on an I/O session yields an UnexpectedEof error.
+    #[test]
+    fn test_sync_session_eof() {
+        struct EofSession;
+        impl IoSession for EofSession {
+            fn start(self, ready: impl FnOnce(io::Result<IoSessionReadWrite>) + Send + 'static) {
+                thread::spawn(move || {
+                    ready(Ok(IoSessionReadWrite::new(io::empty(), io::sink())));
+                });
+            }
+        }
+
+        let parts = boot_io(EofSession).unwrap();
+        let mut session = SyncSession::new(parts.into());
+        let mut err = None;
+        for _ in 0..100 {
+            match session.try_recv() {
+                Ok(None) => thread::sleep(Duration::from_millis(10)),
+                Ok(Some(_)) => panic!("unexpected byte"),
+                Err(e) => {
+                    err = Some(e);
+                    break;
+                }
+            }
+        }
+        let err = err.expect("expected EOF error");
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 }
