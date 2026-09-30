@@ -6,6 +6,17 @@ use crate::machine::generic::duart::DUARTChannel;
 
 use tracing::{error, info};
 
+fn is_normal_disconnect(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::UnexpectedEof
+            | std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::NotConnected
+    ) || e.raw_os_error() == Some(5)
+}
+
 /// Links a DUART channel's pipes to a synchronous session.
 pub struct CommSession {
     session: SyncSession,
@@ -19,7 +30,7 @@ pub struct CommSession {
 
 impl CommSession {
     fn note_error(what: &str, e: &std::io::Error) -> bool {
-        if e.kind() == std::io::ErrorKind::NotConnected {
+        if is_normal_disconnect(e) {
             info!("Session {what} side disconnected, detaching from DUART channel");
             true
         } else {
@@ -31,6 +42,7 @@ impl CommSession {
     pub fn tick(&mut self) {
         // DUART's send to session's send
         let b = if self.send_closed {
+            while self.rx.try_recv().is_ok() {}
             None
         } else if let Some(pending) = self.pending_rx.take() {
             Some(pending)
@@ -145,7 +157,10 @@ mod tests {
             let mut f = self.0.borrow_mut();
             f.recv_polls += 1;
             if f.recv_fails {
-                return Poll::Ready(Err(not_connected()));
+                return Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "End of file",
+                )));
             }
             if f.feed == 0 {
                 return Poll::Pending;
@@ -177,6 +192,8 @@ mod tests {
         terminal.tx.send(b'A').unwrap();
         comm.tick();
         assert_eq!(fake.borrow().send_polls, 1);
+        assert!(comm.send_closed);
+        assert!(!comm.recv_closed);
 
         let mut received = 0;
         for _ in 0..32 {
@@ -197,6 +214,8 @@ mod tests {
 
         comm.tick();
         assert_eq!(fake.borrow().recv_polls, 1);
+        assert!(comm.recv_closed);
+        assert!(!comm.send_closed);
 
         for _ in 0..8 {
             terminal.tx.send(b'C').unwrap();

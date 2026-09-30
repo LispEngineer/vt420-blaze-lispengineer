@@ -4,7 +4,7 @@ use std::task::{Context, Poll};
 use std::{fmt, io, thread};
 
 use atomic_waker::AtomicWaker;
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::session::{SessionParts, SessionRecvEndpoint, SessionSendEndpoint};
 
@@ -141,10 +141,17 @@ fn start(
                             continue;
                         }
                         Err(e) => {
-                            match tx.send(Err(e)) {
-                                Ok(()) => {}
+                            let err = if e.raw_os_error() == Some(5) {
+                                io::Error::new(io::ErrorKind::UnexpectedEof, "End of file")
+                            } else {
+                                e
+                            };
+                            match tx.send(Err(err)) {
+                                Ok(()) => {
+                                    rx_waker.wake();
+                                }
                                 Err(e) => {
-                                    error!("Failed to send error to TX: {}", e);
+                                    debug!("Failed to send error to TX: {}", e);
                                     break;
                                 }
                             }
@@ -156,7 +163,7 @@ fn start(
                             rx_waker.wake();
                         }
                         Err(e) => {
-                            error!("Failed to send byte to RX: {}", e);
+                            debug!("Failed to send byte to RX: {}", e);
                             break;
                         }
                     }
@@ -167,11 +174,14 @@ fn start(
                 loop {
                     match rx.recv() {
                         Ok(byte) => {
-                            writer.write_all(&[byte]).unwrap();
+                            if let Err(e) = writer.write_all(&[byte]) {
+                                debug!("Failed to write byte to session: {}", e);
+                                break;
+                            }
                             tx_waker.wake();
                         }
                         Err(e) => {
-                            error!("Failed to receive byte from TX: {}", e);
+                            debug!("TX channel closed: {}", e);
                             break;
                         }
                     }
@@ -180,6 +190,8 @@ fn start(
         }
         Err(e) => {
             error!("Failed to start IO session: {}", e);
+            let _ = tx.send(Err(e));
+            rx_waker.wake();
         }
     }
 }
