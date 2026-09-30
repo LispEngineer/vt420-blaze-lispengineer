@@ -46,6 +46,7 @@ pub struct Ports {
     pub p3: u8,
     pub p3_read: u8,
     pub sync: SyncHolder,
+    pub frames: usize,
 }
 
 impl Ports {
@@ -61,12 +62,20 @@ impl Ports {
             p3: 0xff,
             p3_read: 0b1111_1111,
             sync: SyncHolder::default(),
+            frames: 0,
         }
     }
 
     pub fn tick(&mut self) {
         // Set the T0 bit (bit 4)
-        let csync_low = self.sync.sync_gen.borrow_mut().tick();
+        let csync_low = {
+            let mut sync_gen = self.sync.sync_gen.borrow_mut();
+            let csync_low = sync_gen.tick();
+            if sync_gen.x == 0 && sync_gen.y == 0 {
+                self.frames += 1;
+            }
+            csync_low
+        };
         self.p3_read &= !(1 << 4);
         self.p3_read |= (csync_low as u8) << 4;
 

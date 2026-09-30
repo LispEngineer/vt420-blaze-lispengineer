@@ -3,13 +3,18 @@ use std::sync::mpsc;
 
 use i8051::peripheral::Serial;
 use i8051::{Cpu, CpuContext, CpuView, DefaultPortMapper, PortMapper};
-use ssu::session::SessionConfig;
+use ssu::session::SessionPartsUnsend;
 
 use crate::machine::TerminalSystem;
+use crate::machine::generic::display::{Display, TextAttr, TextLine};
 use crate::machine::generic::rom::ROM;
+use crate::machine::generic::script::{Script, ScriptHost};
 use crate::machine::vt52x::memory::{Ports, RAM, Vt5xx};
 
 mod memory;
+
+/// Instructions per video frame (about 70 Hz at roughly 1M instructions a second).
+const FRAME_INSTRUCTIONS: usize = 14_000;
 
 fn rom_model(rom: &[u8]) -> Vt5xx {
     if rom.windows(12).any(|w| w == b"\x05VT525\x05VT100") {
@@ -24,6 +29,8 @@ fn rom_model(rom: &[u8]) -> Vt5xx {
 pub struct System {
     pub memory: RAM,
     pub rom: ROM,
+    pub script: Script,
+    pub instruction_count: usize,
 
     serial: Serial,
     default: DefaultPortMapper,
@@ -36,8 +43,8 @@ impl System {
     pub fn new(
         rom: Vec<u8>,
         nvr: Option<&Path>,
-        comm1: Option<SessionConfig>,
-        comm2: Option<SessionConfig>,
+        comm1: Option<SessionPartsUnsend>,
+        comm2: Option<SessionPartsUnsend>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let (serial, in_kbd, out_kbd) = Serial::new(60);
         let model = rom_model(&rom);
@@ -48,6 +55,8 @@ impl System {
         Ok(Self {
             memory: Default::default(),
             rom,
+            script: Script::default(),
+            instruction_count: 0,
             serial,
             default: Default::default(),
             in_kbd,
@@ -57,6 +66,13 @@ impl System {
     }
 
     pub fn step(&mut self, cpu: &mut Cpu) {
+        self.instruction_count += 1;
+        if !self.script.is_done() {
+            let pc = cpu.pc_ext(self);
+            let mut script = std::mem::take(&mut self.script);
+            script.run(pc, self);
+            self.script = script;
+        }
         cpu.step(self);
     }
 }
@@ -64,6 +80,39 @@ impl System {
 impl TerminalSystem for System {
     fn step(&mut self, cpu: &mut Cpu) {
         self.step(cpu);
+    }
+
+    fn exit_code(&self) -> Option<i32> {
+        self.script.exit_code()
+    }
+}
+
+impl ScriptHost for System {
+    fn script_keyboard(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            _ = self.in_kbd.send(byte);
+        }
+    }
+
+    fn script_instructions(&self) -> usize {
+        self.instruction_count
+    }
+
+    fn script_ticks(&self) -> usize {
+        self.instruction_count / FRAME_INSTRUCTIONS
+    }
+}
+
+impl Display for System {
+    fn render_framebuffer(&self, frame: &mut [u8]) {
+        frame.fill(0);
+    }
+
+    fn render_textbuffer(
+        &self,
+        _line: &mut dyn FnMut(usize, TextLine),
+        _cell: &mut dyn FnMut(usize, usize, char, TextAttr),
+    ) {
     }
 }
 

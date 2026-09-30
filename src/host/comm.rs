@@ -1,6 +1,6 @@
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 
-use ssu::session::{SessionConfig, SessionPartsUnsend, SyncSession, xonoff::xonoff_unsend};
+use ssu::session::{SessionPartsUnsend, SyncSession, xonoff::xonoff_unsend};
 
 use crate::machine::generic::duart::DUARTChannel;
 
@@ -63,15 +63,6 @@ impl CommSession {
             }
         }
     }
-}
-
-/// Connect a DUART channel to the configured communication method
-pub fn connect_duart(
-    channel: DUARTChannel,
-    config: SessionConfig,
-) -> Result<CommSession, std::io::Error> {
-    let session = config.start_unsend()?;
-    connect_session(channel, session)
 }
 
 /// Connect a DUART channel to a session

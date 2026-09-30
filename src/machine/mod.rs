@@ -7,6 +7,10 @@ pub mod vt52x;
 pub trait TerminalSystem: CpuContext {
     fn step(&mut self, cpu: &mut i8051::Cpu);
 
+    fn exit_code(&self) -> Option<i32> {
+        None
+    }
+
     /// Periodic `--pc-trace` file flush (VT420 only; default no-op).
     #[cfg(all(feature = "pc-trace", not(target_arch = "wasm32")))]
     fn flush_pc_trace_if_due(&mut self) {}
@@ -26,6 +30,10 @@ impl<S: TerminalSystem> System<S> {
     #[cfg(all(feature = "pc-trace", not(target_arch = "wasm32")))]
     pub fn flush_pc_trace_if_due(&mut self) {
         self.system.flush_pc_trace_if_due();
+    }
+
+    pub fn exit_code(&self) -> Option<i32> {
+        self.system.exit_code()
     }
 
     pub fn new(system: S) -> Self {

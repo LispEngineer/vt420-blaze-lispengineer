@@ -53,6 +53,10 @@ pub fn run<S: TerminalSystem>(
                     if debugger.breakpoints().contains(&cpu.pc_ext(&system)) {
                         debugger.pause();
                     }
+                    if let Some(code) = system.exit_code() {
+                        debugger.exit()?;
+                        std::process::exit(code);
+                    }
                 }
             }
         }
@@ -63,6 +67,9 @@ pub fn run<S: TerminalSystem>(
         system.step(&mut cpu);
         #[cfg(all(feature = "pc-trace", not(target_arch = "wasm32")))]
         system.flush_pc_trace_if_due();
+        if let Some(code) = system.exit_code() {
+            std::process::exit(code);
+        }
     }
     Ok(system.instruction_count)
 }

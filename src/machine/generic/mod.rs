@@ -6,4 +6,5 @@ pub mod keyboard;
 pub mod nvr;
 pub mod ramdac;
 pub mod rom;
+pub mod script;
 pub mod vsync;

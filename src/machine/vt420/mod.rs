@@ -12,6 +12,7 @@ use std::fs;
 use std::mem;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::mpsc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{Duration, Instant};
 
@@ -20,16 +21,18 @@ use i8051::breakpoint::Breakpoints;
 use i8051::peripheral::{P3_INT1, Serial, Timer};
 use i8051::{Cpu, CpuContext, CpuView, DefaultPortMapper, PortMapper};
 use ssu::session::SessionConfig;
+use ssu::session::SessionPartsUnsend;
+#[cfg(feature = "demo")]
 use ssu::session::SessionUnsend;
 use tracing::debug;
 use tracing::{info, trace, warn};
 
 use crate::host::comm::CommSession;
-use crate::host::comm::connect_duart;
 use crate::host::comm::connect_session;
 use crate::machine::TerminalSystem;
 use crate::machine::generic::duart::DUART;
 use crate::machine::generic::rom::ROM;
+use crate::machine::generic::script::{Script, ScriptHost};
 use lk201::LK201;
 
 use self::memory::{DiagnosticMonitor, Ports, RAM};
@@ -56,6 +59,8 @@ pub(crate) struct System {
 
     pub(crate) keyboard: LK201,
     pub(crate) breakpoints: Breakpoints,
+    pub script: Script,
+    script_keyboard: mpsc::Sender<u8>,
 
     #[cfg(all(feature = "pc-trace", not(target_arch = "wasm32")))]
     pub(crate) pc_trace: Option<PcTrace>,
@@ -73,14 +78,34 @@ impl TerminalSystem for System {
             trace.flush_if_due();
         }
     }
+
+    fn exit_code(&self) -> Option<i32> {
+        self.script.exit_code()
+    }
+}
+
+impl ScriptHost for System {
+    fn script_keyboard(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            _ = self.script_keyboard.send(byte);
+        }
+    }
+
+    fn script_instructions(&self) -> usize {
+        self.instruction_count
+    }
+
+    fn script_ticks(&self) -> usize {
+        self.video_row.frames
+    }
 }
 
 impl System {
     pub(crate) fn new(
         rom: Vec<u8>,
         nvr: Option<&Path>,
-        comm1: Option<SessionConfig>,
-        comm2: Option<SessionConfig>,
+        comm1: Option<SessionPartsUnsend>,
+        comm2: Option<SessionPartsUnsend>,
         #[cfg(all(feature = "pc-trace", not(target_arch = "wasm32")))] pc_trace: Option<&Path>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         info!("Loading ROM into memory...");
@@ -98,17 +123,19 @@ impl System {
         let dtr_a = channel_a.dtr.clone();
         let dtr_b = channel_b.dtr.clone();
 
-        #[cfg(feature = "demo")]
-        let comm_a = if let Some(config) = comm1 {
-            connect_duart(channel_a, config)?
-        } else {
-            connect_session(channel_a, crate::host::demo::DemoComm.boot()?)?
+        let comm1 = match comm1 {
+            Some(parts) => parts,
+            #[cfg(feature = "demo")]
+            None => crate::host::demo::DemoComm.boot()?,
+            #[cfg(not(feature = "demo"))]
+            None => SessionConfig::default().start_unsend()?,
         };
-
-        #[cfg(not(feature = "demo"))]
-        let comm_a = connect_duart(channel_a, comm1.unwrap_or_default())?;
-
-        let comm_b = connect_duart(channel_b, comm2.unwrap_or_default())?;
+        let comm2 = match comm2 {
+            Some(parts) => parts,
+            None => SessionConfig::default().start_unsend()?,
+        };
+        let comm_a = connect_session(channel_a, comm1)?;
+        let comm_b = connect_session(channel_b, comm2)?;
 
         let mut memory = RAM::new(rom.bank.clone(), video_row.sync.clone(), duart);
         let mut nvr_file = None;
@@ -171,6 +198,8 @@ impl System {
             default: DefaultPortMapper::default(),
             keyboard: LK201::new(in_kbd.clone(), out_kbd),
             breakpoints: Breakpoints::new(),
+            script: Script::default(),
+            script_keyboard: in_kbd,
             #[cfg(all(feature = "pc-trace", not(target_arch = "wasm32")))]
             pc_trace,
         })
@@ -186,6 +215,11 @@ impl System {
         mem::swap(&mut self.breakpoints, &mut breakpoints);
 
         let pc = cpu.pc_ext(self);
+        if !self.script.is_done() {
+            let mut script = mem::take(&mut self.script);
+            script.run(pc, self);
+            self.script = script;
+        }
         // Trace VSYNC phase for timer interrupts
         // if pc == 0x928 {
         //     let flag = cpu.internal_ram[0x20] & (1 << 7) != 0;
@@ -392,8 +426,8 @@ mod tests {
         let mut system = System::new(
             rom,
             None,
-            Some(SessionConfig::default()),
-            Some(SessionConfig::default()),
+            Some(SessionConfig::default().start_unsend().unwrap()),
+            Some(SessionConfig::default().start_unsend().unwrap()),
             #[cfg(all(feature = "pc-trace", not(target_arch = "wasm32")))]
             None,
         )

@@ -88,7 +88,11 @@ pub fn run<S: TextTerminal>(
 
     crossterm::terminal::disable_raw_mode()?;
     crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen,)?;
-    result
+    let (res, exit_code) = result?;
+    if let Some(code) = exit_code {
+        std::process::exit(code);
+    }
+    Ok(res)
 }
 
 fn run_inner<S: TextTerminal>(
@@ -96,7 +100,7 @@ fn run_inner<S: TextTerminal>(
     mut cpu: Cpu,
     _debugger: Option<Debugger>,
     mut options: DrawOptions,
-) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(usize, Option<i32>), Box<dyn std::error::Error + Send + Sync>> {
     let mut running = true;
     let mut keyboard = CrosstermKeyboard::default();
     let mut input = system.keyboard_input();
@@ -106,6 +110,9 @@ fn run_inner<S: TextTerminal>(
         if running {
             let pc = cpu.pc_ext(&system);
             system.step(&mut cpu);
+            if let Some(code) = system.exit_code() {
+                return Ok((system.instruction_count(), Some(code)));
+            }
             system.check_step(pc, cpu.pc_ext(&system));
         }
 
@@ -135,7 +142,7 @@ fn run_inner<S: TextTerminal>(
                         system.flush_pc_trace_now()?;
                     }
                     Some(KeyboardCommand::Quit) => {
-                        return Ok(system.instruction_count());
+                        return Ok((system.instruction_count(), None));
                     }
                     None => {}
                 }

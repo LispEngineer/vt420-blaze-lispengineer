@@ -11,6 +11,7 @@ use ratatui::crossterm;
 use ratatui::crossterm::event::KeyModifiers;
 use tracing::info;
 
+use crate::machine::TerminalSystem;
 use crate::machine::generic::display::Display;
 use crate::machine::generic::keyboard::lk201_input::Lk201Input;
 use crate::machine::vt420::System;
@@ -43,6 +44,9 @@ pub fn run(
         }
         while system.memory.mapper.is_status_bar_phase() {
             system.step(&mut cpu);
+        }
+        if let Some(code) = system.exit_code() {
+            std::process::exit(code);
         }
         #[cfg(feature = "vram-dump")]
         {
@@ -157,6 +161,10 @@ fn run_debugger(
             }
             if debugger.breakpoints().contains(&cpu.pc_ext(system)) {
                 debugger.pause();
+            }
+            if let Some(code) = system.exit_code() {
+                debugger.exit().unwrap();
+                std::process::exit(code);
             }
         }
         #[cfg(all(feature = "pc-trace", not(target_arch = "wasm32")))]

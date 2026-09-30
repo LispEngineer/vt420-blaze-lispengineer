@@ -1,7 +1,7 @@
 use clap::Parser;
 #[cfg(feature = "tui")]
 use i8051_debug_tui::{Debugger, TracingCollector};
-use ssu::session::SessionConfig;
+use ssu::session::{SessionConfig, SessionPartsUnsend};
 use std::path::PathBuf;
 use tracing::{Level, info};
 
@@ -17,6 +17,7 @@ mod pc_trace;
 use i8051::Cpu;
 
 use crate::machine::System;
+use crate::machine::generic::script::Script;
 
 #[derive(Default, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum Display {
@@ -90,6 +91,10 @@ struct Args {
     #[arg(value_parser = parse_hex_address, long="bp", alias="breakpoint")]
     breakpoint: Vec<u32>,
 
+    /// Script of actions to run at given PCs
+    #[arg(long, value_name = "FILE")]
+    script: Option<PathBuf>,
+
     /// Enable logging
     #[arg(long)]
     log: bool,
@@ -114,6 +119,18 @@ struct Args {
     #[cfg(all(feature = "pc-trace", not(target_arch = "wasm32")))]
     #[arg(long, value_name = "FILE")]
     pc_trace: Option<PathBuf>,
+}
+
+fn comm_session(
+    script: Option<&Script>,
+    channel: usize,
+    config: Option<SessionConfig>,
+) -> Result<Option<SessionPartsUnsend>, std::io::Error> {
+    let inner = config.map(SessionConfig::start_unsend).transpose()?;
+    Ok(match script {
+        Some(script) => Some(script.comm_session(channel, inner)),
+        None => inner,
+    })
 }
 
 fn parse_hex_address(s: &str) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
@@ -277,14 +294,18 @@ fn run_vt420(
 
     info!("Configuring system...");
 
-    let vt420 = machine::vt420::System::new(
+    let script = args.script.as_deref().map(Script::load).transpose()?;
+    let mut vt420 = machine::vt420::System::new(
         rom,
         args.nvr.as_deref(),
-        args.comm1,
-        args.comm2,
+        comm_session(script.as_ref(), 0, args.comm1)?,
+        comm_session(script.as_ref(), 1, args.comm2)?,
         #[cfg(all(feature = "pc-trace", not(target_arch = "wasm32")))]
         args.pc_trace.as_deref(),
     )?;
+    if let Some(script) = script {
+        vt420.script = script;
+    }
     let mut system = System::new(vt420);
 
     let breakpoints = &mut system.system.breakpoints;
@@ -412,7 +433,17 @@ fn run_vt52x(
 
     info!("Configuring system...");
 
-    let vt52x = machine::vt52x::System::new(rom, args.nvr.as_deref(), args.comm1, args.comm2)?;
+    let script = args.script.as_deref().map(Script::load).transpose()?;
+    let default = || script.is_none().then(SessionConfig::default);
+    let mut vt52x = machine::vt52x::System::new(
+        rom,
+        args.nvr.as_deref(),
+        comm_session(script.as_ref(), 0, args.comm1.or_else(default))?,
+        comm_session(script.as_ref(), 1, args.comm2.or_else(default))?,
+    )?;
+    if let Some(script) = script {
+        vt52x.script = script;
+    }
     let mut system = System::new(vt52x);
 
     info!("Starting CPU execution...");
