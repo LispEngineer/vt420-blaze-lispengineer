@@ -46,7 +46,7 @@ mod tests {
     use super::*;
     use crate::session::{
         Session,
-        io_session::{boot_io, IoSession, IoSessionReadWrite},
+        io_session::{IoSession, IoSessionReadWrite, boot_io},
         loopback::LoopbackConfig,
         pipe::AnonymousPipeConfig,
     };
