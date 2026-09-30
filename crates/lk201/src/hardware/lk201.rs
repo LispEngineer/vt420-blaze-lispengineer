@@ -59,6 +59,19 @@ const KEY_MATRIX_PATTERN_HIGH: [u8; 8] = [
     10, 11, 12, 13, 14, 15, 16, 17,
 ];
 
+/// The matrix row a P1 select value drives: the low nibble decodes rows by
+/// `KEY_MATRIX_PATTERN_LOW`, the high nibble rows 10-17.
+pub(super) fn matrix_row(p1: u8) -> Option<usize> {
+    if let Some(low) = KEY_MATRIX_PATTERN_LOW.get((p1 & 0xf) as usize) {
+        Some(*low as usize)
+    } else {
+        KEY_MATRIX_PATTERN_HIGH
+            .get(((p1 & 0xf0) >> 4) as usize)
+            .map(|high| *high as usize)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScanCell {
     row: u8,
     col: u8,
@@ -86,6 +99,14 @@ impl ScanCell {
         let row = address / COL_COUNT;
         let col = address % COL_COUNT;
         Self::new(row, col)
+    }
+
+    pub(super) fn row(&self) -> usize {
+        self.row as usize
+    }
+
+    pub(super) fn col(&self) -> u8 {
+        self.col
     }
 
     pub const fn scancode(&self) -> u8 {
@@ -181,15 +202,10 @@ impl PortMapper for LK201Ports {
         match addr {
             SFR_P0 => self.ports[0].1 = value,
             SFR_P1 => {
-                if let Some(low) = KEY_MATRIX_PATTERN_LOW.get((value & 0xf) as usize) {
-                    self.ports[0].0 = !self.key_matrix[*low as usize];
-                } else if let Some(high) =
-                    KEY_MATRIX_PATTERN_HIGH.get(((value & 0xf0) >> 4) as usize)
-                {
-                    self.ports[0].0 = !self.key_matrix[*high as usize];
-                } else {
-                    self.ports[0].0 = 0xFF;
-                }
+                self.ports[0].0 = match matrix_row(value) {
+                    Some(row) => !self.key_matrix[row],
+                    None => 0xFF,
+                };
             }
             SFR_P2 => {
                 self.ports[2].0 = value;

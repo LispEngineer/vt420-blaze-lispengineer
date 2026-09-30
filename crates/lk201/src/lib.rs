@@ -12,6 +12,8 @@
 mod hardware;
 #[cfg(feature = "hardware")]
 pub use hardware::lk201::{LK201Hardware, ScanCell};
+#[cfg(feature = "hardware")]
+pub use hardware::lk250::{LK250Hardware, Lk250Mode};
 
 mod software;
 pub use software::{LK201, LK201Sender};
@@ -352,6 +354,7 @@ impl TryFrom<&VecDeque<u8>> for LK201Command {
             0x99 => Ok(LK201Command::KeyClickDisable),
             0xB9 => Ok(LK201Command::CtrlKeyClickDisable),
             0x9F => Ok(LK201Command::SoundClick),
+            0x80 => Ok(LK201Command::TestExit),
 
             // Bell Control
             0x23 => {
@@ -810,16 +813,7 @@ mod tests {
         test_parse(&[0xCB], LK201Command::TestMode);
         test_parse(&[0x8B], LK201Command::Resume);
         test_parse(&[0x89], LK201Command::Inhibit);
-
-        // Note: 0x80 is TestExit but has same bit pattern as SetMode{division:0, mode:Down}
-        // So it will be parsed as a mode command
-        test_parse(
-            &[0x80],
-            LK201Command::SetMode {
-                mode: KeyMode::Down,
-                division: Division(0),
-            },
-        );
+        test_parse(&[0x80], LK201Command::TestExit);
     }
 
     #[test]

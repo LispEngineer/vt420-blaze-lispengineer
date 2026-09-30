@@ -83,6 +83,7 @@ pub struct LK201 {
     collect_commands: bool,
     collected_bytes: Vec<u8>,
     collected_commands: Vec<LK201Command>,
+    loopback: bool,
 }
 
 impl LK201 {
@@ -94,7 +95,13 @@ impl LK201 {
             collect_commands: false,
             collected_bytes: Vec::new(),
             collected_commands: Vec::new(),
+            loopback: false,
         }
+    }
+
+    /// Replace the keyboard with a loopback plug.
+    pub fn set_loopback(&mut self, loopback: bool) {
+        self.loopback = loopback;
     }
 
     pub fn start_collecting_commands(&mut self) {
@@ -114,6 +121,15 @@ impl LK201 {
     }
 
     pub fn tick(&mut self) {
+        if self.loopback {
+            while let Ok(byte) = self.recv.try_recv() {
+                if self.collect_commands {
+                    self.collected_bytes.push(byte);
+                }
+                _ = self.send.send(byte);
+            }
+            return;
+        }
         // Accumulate incoming bytes
         let mut received = false;
         while let Ok(byte) = self.recv.try_recv() {

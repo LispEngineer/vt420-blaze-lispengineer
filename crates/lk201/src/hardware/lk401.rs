@@ -374,4 +374,28 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_id_matches_firmware() {
+        for cmd in [LK201Command::PowerUp, LK201Command::RequestId] {
+            let mut hardware = LK401Hardware::new();
+            for _ in 0..0x4000 {
+                hardware.tick();
+                _ = hardware.serial_out.try_recv();
+            }
+            let bytes: Vec<u8> = cmd.clone().into();
+            for b in &bytes {
+                hardware.serial_in.send(*b).unwrap();
+            }
+            let mut hw_response = vec![];
+            for _ in 0..0x40000 {
+                hardware.tick();
+                if let Ok(byte) = hardware.serial_out.try_recv() {
+                    hw_response.push(byte);
+                }
+            }
+            let response = cmd.response().unwrap().to_bytes();
+            assert_eq!(response, hw_response, "{cmd:?}");
+        }
+    }
 }
