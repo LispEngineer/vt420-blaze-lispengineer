@@ -79,11 +79,11 @@ impl Terminal {
         }
     }
 
-    fn window(&self) -> &winit::window::Window {
+    fn window(&self) -> Option<&winit::window::Window> {
         match &self.pixels {
-            PixelsState::Initializing { window, .. } => window,
-            PixelsState::Running { window, .. } => window,
-            PixelsState::None(..) => unreachable!(),
+            PixelsState::Initializing { window, .. } => Some(window),
+            PixelsState::Running { window, .. } => Some(window),
+            PixelsState::None(..) => None,
         }
     }
 
@@ -108,7 +108,7 @@ impl Terminal {
         info!("Graphics: window created");
 
         let PixelsState::None(proxy) = &mut self.pixels else {
-            unreachable!();
+            return;
         };
         let proxy = proxy.clone();
         let window = Arc::new(window);
@@ -116,30 +116,40 @@ impl Terminal {
             window: window.clone(),
             size: None,
         };
-        let window = window.clone();
-        let future = async move {
-            match create_pixels(window).await {
-                Ok(pixels) => {
-                    info!("Graphics: sending pixels event");
-                    if let Err(e) = proxy.send_event(pixels) {
-                        error!("Graphics: Event loop closed during initialization: {e}");
-                        return;
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let window = window.clone();
+            let future = async move {
+                match create_pixels(window).await {
+                    Ok(pixels) => {
+                        info!("Graphics: sending pixels event");
+                        if let Err(e) = proxy.send_event(pixels) {
+                            error!("Graphics: Event loop closed during initialization: {e}");
+                            return;
+                        }
+                        info!("Graphics: pixels event sent");
                     }
-                    info!("Graphics: pixels event sent");
+                    Err(e) => {
+                        log_pixels_error(e);
+                    }
+                }
+            };
+            wasm_bindgen_futures::spawn_local(future);
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            match pollster::block_on(create_pixels(window.clone())) {
+                Ok(pixels) => {
+                    self.pixels = PixelsState::Running { window, pixels };
+                    info!("Graphics: pixels initialized");
                 }
                 Err(e) => {
                     log_pixels_error(e);
                 }
             }
-        };
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            wasm_bindgen_futures::spawn_local(future);
         }
-
-        #[cfg(not(target_arch = "wasm32"))]
-        pollster::block_on(future);
 
         info!("Graphics: window initialized");
     }
@@ -169,7 +179,9 @@ impl ApplicationHandler<Pixels<'static>> for Terminal {
         let idle = self.frame_policy.plan_idle();
         event_loop.set_control_flow(idle.control_flow);
         if idle.request_redraw {
-            self.window().request_redraw();
+            if let Some(window) = self.window() {
+                window.request_redraw();
+            }
         }
         self.input.end_step();
     }
@@ -213,7 +225,7 @@ impl ApplicationHandler<Pixels<'static>> for Terminal {
     ) {
         info!("Graphics: got pixels event");
         let PixelsState::Initializing { window, size } = &mut self.pixels else {
-            unreachable!();
+            return;
         };
         let mut pixels = event;
         let window = window.clone();
@@ -229,7 +241,9 @@ impl ApplicationHandler<Pixels<'static>> for Terminal {
             }
         }
         self.pixels = PixelsState::Running { window, pixels };
-        self.window().request_redraw();
+        if let Some(window) = self.window() {
+            window.request_redraw();
+        }
     }
 
     fn window_event(
@@ -241,9 +255,7 @@ impl ApplicationHandler<Pixels<'static>> for Terminal {
         self.input.process_window_event(&event);
         if let Some(resize) = self.input.window_resized() {
             match &mut self.pixels {
-                PixelsState::None(..) => {
-                    unreachable!();
-                }
+                PixelsState::None(..) => {}
                 PixelsState::Initializing { size, .. } => {
                     *size = Some(resize);
                 }
